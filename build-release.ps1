@@ -16,7 +16,11 @@ if (!(Test-Path -LiteralPath $env:POCKET_KEYSTORE) -or !(Test-Path -LiteralPath 
 }
 $env:POCKET_KEYSTORE_PASSWORD=[System.IO.File]::ReadAllText($passwordPath).Trim()
 try {
-    & "$PSScriptRoot\gradlew.bat" --no-daemon testDebugUnitTest assembleRelease
+    $gradleExecutable=Join-Path $PSScriptRoot 'gradlew.bat'
+    if (Test-Path -LiteralPath 'D:\Github\android-build-tools\gradle-8.9\bin\gradle.bat') {
+        $gradleExecutable='D:\Github\android-build-tools\gradle-8.9\bin\gradle.bat'
+    }
+    & $gradleExecutable --no-daemon testDebugUnitTest assembleRelease
     if ($LASTEXITCODE -ne 0) { throw "Gradle 构建失败：$LASTEXITCODE" }
     Write-Output "APK：$PSScriptRoot\app\build\outputs\apk\release\app-release.apk"
 } finally {

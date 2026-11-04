@@ -223,7 +223,19 @@ public class PocketService extends AccessibilityService {
             if(pkg.equals("tv.danmaku.bili"))count++;
         }
         report.append("B站可读取窗口数：").append(count);
-        repo.log("多窗口诊断",report.toString());return report.toString();
+        android.util.Log.i("PocketWindows",report.toString());repo.log("多窗口诊断",report.toString());return report.toString();
+    }
+    public void previewFloatingWindow(boolean left){
+        if(running){Toast.makeText(this,"请先停止任务，再测试双开窗口",Toast.LENGTH_LONG).show();return;}
+        java.util.ArrayList<Rect> windows=new java.util.ArrayList<>();
+        for(AccessibilityWindowInfo win:getWindows()){
+            AccessibilityNodeInfo node=win.getRoot();if(node==null||!"tv.danmaku.bili".contentEquals(node.getPackageName()==null?"":node.getPackageName()))continue;
+            Rect rect=new Rect();win.getBoundsInScreen(rect);windows.add(rect);
+        }
+        if(windows.size()!=2){repo.log("小窗放大测试","需要恰好两个可读取的B站窗口，实际 "+windows.size());return;}
+        windows.sort(java.util.Comparator.comparingInt(Rect::centerX));Rect target=windows.get(left?0:1);
+        repo.log("小窗放大测试",(left?"左":"右")+target.toShortString());
+        tap(target.centerX(),target.centerY());h.postDelayed(()->windowReport(),1800);
     }
     public void recordEmoji(){
         stop("表情路径录制",false);
