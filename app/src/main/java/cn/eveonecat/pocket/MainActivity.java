@@ -66,10 +66,10 @@ public class MainActivity extends Activity {
         button(dual,"检测 B站小窗口",()->{if(PocketService.instance==null){toast("请先开启无障碍");return;}toast("5秒后检测，请立即切回两个B站小窗口；结果在消息页查看");handler.postDelayed(()->{if(PocketService.instance!=null){PocketService.instance.windowReport();toast("检测已记录，请在消息页查看");}},5000);});
         note(dual,"按轮流放大方式适配。以下测试只点击迷你窗中央，不抢红包、不发送消息；请先停止运行。测试结果记录在消息页。");
         for(boolean left:new boolean[]{true,false})button(dual,"双开校准：放大"+(left?"左":"右")+"侧小窗",()->{PocketService service=PocketService.instance;if(service==null){toast("请先连接无障碍");return;}if(service.running){toast("请先停止运行");return;}moveTaskToBack(true);handler.postDelayed(()->service.previewFloatingWindow(left),2000);});
-        note(dual,"循环测试：放大后尝试拖动顶部控制栏回角落，并检查窗口尺寸；失败只记录日志，不会显示为成功。测试前先将两个窗口恢复为迷你窗。");
+        note(dual,"循环测试：左窗长按右下角向左上拖；右窗长按左下角向右上拖，并检查窗口尺寸；失败只记录日志，不会显示为成功。测试前先将两个窗口恢复为迷你窗。");
         for(boolean left:new boolean[]{true,false})button(dual,"循环测试："+(left?"左":"右")+"窗放大后自动缩小",()->{PocketService service=PocketService.instance;if(service==null){toast("请先开启无障碍");return;}if(service.running){toast("请先停止任务");return;}moveTaskToBack(true);handler.postDelayed(()->service.previewFloatingCycle(left),2000);});
         LinearLayout safe=card("异常停止");note(safe,"当前验证锁定："+p.s("verificationLock","无"));button(safe,"已人工处理验证，解除本地锁定",()->new AlertDialog.Builder(this).setTitle("解除本地锁定").setMessage("请先在B站中手动完成验证并确认账号状态正常。解除只允许再次启动，不代表平台限制已解除。").setPositiveButton("确认已处理",(d,w)->{p.put("verificationLock","");show("设置");}).setNegativeButton("取消",null).show());
-        LinearLayout about=card("关于与更新");note(about,"0.1.2 · 真机适配预览版\n所有任务、通知原文和截图只保存在手机；不上传账号凭证。\n开源地址与APK更新见私人GitHub仓库。此版本尚需红包实景验证，不保证中奖。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
+        LinearLayout about=card("关于与更新");note(about,"0.1.3 · 真机适配预览版\n所有任务、通知原文和截图只保存在手机；不上传账号凭证。\n开源地址与APK更新见私人GitHub仓库。此版本尚需红包实景验证，不保证中奖。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
     }
     void field(LinearLayout box,String title,String key,String def,boolean multiline){
         box.addView(text(title,14,MUTED));EditText e=new EditText(this);e.setTextColor(INK);e.setHintTextColor(MUTED);e.setText(p.s(key,def));e.setSingleLine(!multiline);e.setTextSize(15);box.addView(e,new LinearLayout.LayoutParams(-1,-2));

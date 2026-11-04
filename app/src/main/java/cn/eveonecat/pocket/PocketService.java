@@ -256,23 +256,38 @@ public class PocketService extends AccessibilityService {
             java.util.Map<Integer,Rect> expanded=floatingRects();Rect large=expanded.get(selected);
             if(large==null||large.width()<mini.width()*1.4||!expanded.containsKey(other)){repo.log("窗口切换失败","未确认目标放大或另一窗口已不可读");windowReport();return;}
             repo.log("窗口已放大",selected+" "+large.toShortString());
-            // HyperOS window decoration sits just outside the app's content frame.
-            // Drag only the upper decoration, never the Bilibili content or Android BACK.
-            float startX=large.centerX(),startY=Math.max(1,large.top-18);
+            // This phone shrinks by holding the opposite bottom corner and dragging diagonally.
+            // Use a continued stroke so the initial hold really happens before movement.
+            float inset=Math.max(2,Math.min(12,large.width()*.015f));
+            float startX=left?large.right-inset:large.left+inset,startY=large.bottom-inset;
             android.util.DisplayMetrics d=getResources().getDisplayMetrics();
             float endX=d.widthPixels*(left?.12f:.88f),endY=d.heightPixels*.16f;
-            Path path=new Path();path.moveTo(startX,startY);path.lineTo(startX,startY);path.lineTo(endX,endY);
+            Path holdPath=new Path();holdPath.moveTo(startX,startY);
+            GestureDescription.StrokeDescription hold=new GestureDescription.StrokeDescription(holdPath,0,400,true);
+            Path dragPath=new Path();dragPath.moveTo(startX,startY);dragPath.lineTo(endX,endY);
+            Runnable verify=()->h.postDelayed(()->{
+                java.util.Map<Integer,Rect> after=floatingRects();Rect small=after.get(selected);
+                if(small!=null&&small.width()<=mini.width()*1.25&&after.containsKey(other)){
+                    p.put(left?"leftCycleVerified":"rightCycleVerified",true);repo.log("窗口循环成功",selected+" 放大→缩小，另一窗口仍可读取 "+small.toShortString());
+                }else{repo.log("窗口缩小待标定","已执行下角长按斜拖，但没有确认缩小");}
+                windowReport();
+            },2000);
             h.postDelayed(()->{
                 if(running){repo.log("窗口测试取消","任务已开始运行");return;}
-                boolean accepted=dispatchGesture(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path,0,850)).build(),null,null);
+                repo.log("窗口缩小手势",(left?"右下角→左上":"左下角→右上")+" · 长按400ms后拖动900ms");
+                boolean accepted=dispatchGesture(new GestureDescription.Builder().addStroke(hold).build(),new GestureResultCallback(){
+                    @Override public void onCompleted(GestureDescription gesture){
+                        Path movement=dragPath;
+                        if(running){movement=new Path();movement.moveTo(startX,startY);}
+                        GestureDescription.StrokeDescription drag=hold.continueStroke(movement,0,running?1:900,false);
+                        if(!dispatchGesture(new GestureDescription.Builder().addStroke(drag).build(),new GestureResultCallback(){
+                            @Override public void onCompleted(GestureDescription g){verify.run();}
+                            @Override public void onCancelled(GestureDescription g){repo.log("窗口缩小失败","拖动被系统取消");}
+                        },null))repo.log("窗口缩小失败","系统拒绝后续拖动");
+                    }
+                    @Override public void onCancelled(GestureDescription gesture){repo.log("窗口缩小失败","长按被系统取消");}
+                },null);
                 if(!accepted){repo.log("窗口缩小失败","系统未接受手势");return;}
-                h.postDelayed(()->{
-                    java.util.Map<Integer,Rect> after=floatingRects();Rect small=after.get(selected);
-                    if(small!=null&&small.width()<=mini.width()*1.25&&after.containsKey(other)){
-                        p.put(left?"leftCycleVerified":"rightCycleVerified",true);repo.log("窗口循环成功",selected+" 放大→缩小，另一窗口仍可读取 "+small.toShortString());
-                    }else{repo.log("窗口缩小待标定","手势已执行但没有确认缩小；需要按本机实际控制栏调整");}
-                    windowReport();
-                },2000);
             },2500);
         },2000);
     }
