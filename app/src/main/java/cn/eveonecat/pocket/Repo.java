@@ -21,6 +21,7 @@ final class Repo extends SQLiteOpenHelper {
         if(n>0)log("中断恢复",n+" 个任务标记为无法确认，不计连续未中奖");
     }
     void log(String kind,String detail){
+        android.util.Log.i("PocketRun",kind+" · "+(detail==null?"":detail));
         ContentValues v=new ContentValues();v.put("stamp",System.currentTimeMillis());v.put("kind",kind);v.put("detail",detail==null?"":detail);long id=getWritableDatabase().insert("events",null,v);
         if(id%100==0)getWritableDatabase().execSQL("DELETE FROM events WHERE id < ?",new Object[]{id-5000});
     }

@@ -37,6 +37,16 @@ public class PacketParserTest {
         assertEquals(2,out.size());assertEquals("123",out.get(0).room());assertEquals("123",out.get(1).room());
         assertEquals(SENT+120000,out.get(1).end());
     }
+    @Test public void qqTruncatedUrlRequiresExplicitRoomLine(){
+        String body="[电池红包] 100电池\n条件: 粉丝团\n剩余: 01分00秒\n主播甲  12345678\nhttps://li";
+        assertEquals("12345678",PacketParser.parse(body,SENT).get(0).room());
+        assertTrue(PacketParser.parse(body.replace("https://li","https://evil.test"),SENT).isEmpty());
+        assertTrue(PacketParser.parse(body.replace("主播甲  12345678\n",""),SENT).isEmpty());
+    }
+    @Test public void multipleTruncatedPacketCardsShareExplicitRoom(){
+        String body="[电池红包] 100电池\n条件: 关注\n剩余: 02分00秒\n[电池红包] 520电池\n条件: 粉丝团\n剩余: 04分00秒\n主播甲  12345678\nhttps://live.bi";
+        assertEquals(2,PacketParser.parse(body,SENT).size());
+    }
     @Test public void zeroCountdownAndMissingTimeAreRejected() {
         assertTrue(PacketParser.parse(packet(100,"关注","00分00秒","123"),SENT).isEmpty());
         assertTrue(PacketParser.parse(packet(100,"关注","未知","123"),SENT).isEmpty());

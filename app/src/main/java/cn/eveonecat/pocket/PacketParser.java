@@ -11,6 +11,15 @@ public final class PacketParser {
         if(text==null||text.length()>32000||sent<0)return List.of();
         List<Packet> out=new ArrayList<>(); Set<String> shared=new HashSet<>(); Matcher rm=ROOM.matcher(text);
         while(rm.find())shared.add(rm.group(1));
+        // QQ can truncate a long multi-packet notice inside the final URL. The bot's
+        // explicit room-number line remains intact; accept only this exact structure.
+        if(shared.isEmpty()){
+            Matcher shortened=Pattern.compile("(?m)^([^\\r\\n]+?)\\s+([1-9]\\d{0,14})\\s*\\r?\\n\\s*(https?://[^\\s]*)\\s*$").matcher(text.trim());
+            while(shortened.find()){
+                String url=shortened.group(3);
+                if(url.length()>=10&&"https://live.bilibili.com/".startsWith(url))shared.add(shortened.group(2));
+            }
+        }
         for(String b:text.split("(?=\\[电池红包\\]|【电池红包】)")) {
             if(!b.contains("电池红包"))continue;
             Set<String> rooms=new HashSet<>(); rm=ROOM.matcher(b); while(rm.find())rooms.add(rm.group(1));

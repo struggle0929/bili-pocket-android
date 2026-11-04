@@ -6,8 +6,23 @@ import java.util.*;
 
 public class QQListener extends NotificationListenerService {
     public static volatile boolean connected;
-    @Override public void onListenerConnected(){connected=true;try(Repo r=new Repo(this)){r.log("QQ通知监听","系统通知监听已连接；只读取匹配群名的 QQ 通知");}}
-    @Override public void onListenerDisconnected(){connected=false;requestRebind(new android.content.ComponentName(this,QQListener.class));}
+    public static QQListener instance;
+    final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());
+    final Runnable poll=new Runnable(){public void run(){if(connected&&new Prefs(QQListener.this).b("listen",false))refresh(false);handler.postDelayed(this,5000);}};
+    @Override public void onListenerConnected(){instance=this;connected=true;handler.removeCallbacks(poll);handler.post(poll);try(Repo r=new Repo(this)){r.log("QQ通知监听","系统通知监听已连接；每5秒补查活动通知，兼容系统分身 QQ");}}
+    public void refresh(){refresh(true);}
+    void refresh(boolean report){
+        int qq=0,matched=0;StringBuilder profiles=new StringBuilder();
+        try{for(StatusBarNotification n:getActiveNotifications())if(n.getPackageName().equals("com.tencent.mobileqq")){
+            qq++;profiles.append(n.getUser()).append(' ');
+            String title=String.valueOf(n.getNotification().extras.getCharSequence(Notification.EXTRA_TITLE,""));
+            if(title.contains(new Prefs(this).s("group","B站直播区游戏群")))matched++;
+            onNotificationPosted(n);
+        }}catch(RuntimeException e){try(Repo r=new Repo(this)){r.log("QQ通知检查失败",e.toString());}return;}
+        if(report)try(Repo r=new Repo(this)){r.log("QQ通知检查","可读取 QQ 通知 "+qq+"，目标群 "+matched+"，所属空间 "+profiles);}
+    }
+    @Override public void onListenerDisconnected(){connected=false;handler.removeCallbacks(poll);if(instance==this)instance=null;requestRebind(new android.content.ComponentName(this,QQListener.class));}
+    @Override public void onDestroy(){handler.removeCallbacks(poll);if(instance==this){instance=null;connected=false;}super.onDestroy();}
     @Override public void onNotificationPosted(StatusBarNotification sbn){
         if(!sbn.getPackageName().equals("com.tencent.mobileqq"))return;
         Prefs p=new Prefs(this); if(!p.b("listen",false))return;
@@ -26,7 +41,7 @@ public class QQListener extends NotificationListenerService {
             // InboxStyle can preserve bot message lines beyond the compact notification preview.
             CharSequence[] lines=b.getCharSequenceArray(Notification.EXTRA_TEXT_LINES);
             if(lines!=null&&lines.length>0){StringBuilder all=new StringBuilder();for(CharSequence line:lines)all.append(line).append('\n');if(all.length()>text.length())text=all;}
-            r.ingest(text.toString(),sbn.getNotification().when>0?sbn.getNotification().when:sbn.getPostTime(),p);
+            r.ingest(text.toString(),sbn.getPostTime(),p);
         }catch(RuntimeException e){
             // A malformed third-party notification must not kill the listener service.
             try(Repo r=new Repo(this)){r.log("QQ通知解析失败",e.getClass().getSimpleName());}
