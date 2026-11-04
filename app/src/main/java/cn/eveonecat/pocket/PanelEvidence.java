@@ -14,7 +14,7 @@ final class PanelEvidence {
         for(Box b:boxes){
             String text=b.text.replaceAll("\\s","");
             if(b.cx()<width*.30||b.cx()>width*.70||b.cy()<height*.30||b.cy()>height*.88)continue;
-            if(text.endsWith("发的红包")||text.startsWith("恭喜你获奖啦")||text.startsWith("恭喜中奖")){
+            if(text.endsWith("发的红包")||ResultEvidence.winTitle(text)){
                 if(anchor==null||b.top<anchor.top)anchor=b;
             }
         }
@@ -30,8 +30,18 @@ final class PanelEvidence {
         for(Box b:boxes)if(contains(b.left,b.top,b.right,b.bottom)&&seen.add(b.text))out.append(b.text).append('\n');
         return out.toString();
     }
-    int amount(){
-        if(anchor==null)return -1;
+    boolean won(){
+        if(anchor==null||!ResultEvidence.winTitle(anchor.text))return false;
+        for(Box b:boxes)if(contains(b.left,b.top,b.right,b.bottom)&&b.text.replaceAll("[\\s>›》]","").matches("开心收下|查看中奖名单|收下奖励"))return true;
+        return false;
+    }
+    int amount(){Box b=amountBox();if(b==null)return -1;return parseAmount(b.text);}
+    static int parseAmount(String value){
+        Matcher explicit=Pattern.compile("(?:总价值)?(?:电池)?[⚡]?([0-9]{1,6})(?:电池)?").matcher(value.replaceAll("\\s",""));
+        return explicit.matches()?Integer.parseInt(explicit.group(1)):-1;
+    }
+    Box amountBox(){
+        if(anchor==null)return null;
         Map<Integer,Box> values=new HashMap<>();
         for(Box b:boxes){
             if(b.cx()<width*.35||b.cx()>width*.65||b.top<=anchor.bottom||b.cy()>Math.min(height*.90,anchor.bottom+height*.17))continue;
@@ -43,8 +53,8 @@ final class PanelEvidence {
                 Box old=values.get(n);if(old==null||b.bottom-b.top>old.bottom-old.top)values.put(n,b);
             }catch(NumberFormatException ignored){}
         }
-        if(values.size()==1)return values.keySet().iterator().next();
+        if(values.size()==1)return values.values().iterator().next();
         // Multiple distinct numbers (e.g. two cards or a chat overlay) are not trustworthy.
-        return -1;
+        return null;
     }
 }

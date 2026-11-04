@@ -6,14 +6,14 @@ import android.database.sqlite.*;
 import java.util.*;
 
 final class Repo extends SQLiteOpenHelper {
-    Repo(Context c){super(c,"pocket.db",null,2);}
+    Repo(Context c){super(c,"pocket.db",null,3);}
     public void onCreate(SQLiteDatabase db){
-        db.execSQL("CREATE TABLE tasks(id INTEGER PRIMARY KEY,room TEXT, end INTEGER,amount INTEGER,condition TEXT,state TEXT DEFAULT '等待',account TEXT DEFAULT '主账号',evidence TEXT DEFAULT '',UNIQUE(room,end,account))");
+        db.execSQL("CREATE TABLE tasks(id INTEGER PRIMARY KEY,room TEXT, end INTEGER,amount INTEGER,condition TEXT,state TEXT DEFAULT '等待',account TEXT DEFAULT '主账号',evidence TEXT DEFAULT '',prize_quantity INTEGER,prize_unit TEXT DEFAULT '',UNIQUE(room,end,account))");
         db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY,stamp INTEGER,kind TEXT,detail TEXT)");
         db.execSQL("CREATE TABLE visits(day TEXT,room TEXT,PRIMARY KEY(day,room))");
         db.execSQL("CREATE TABLE messages_seen(fingerprint TEXT PRIMARY KEY,stamp INTEGER)");
     }
-    public void onUpgrade(SQLiteDatabase db,int a,int b){if(a<2)db.execSQL("CREATE TABLE IF NOT EXISTS messages_seen(fingerprint TEXT PRIMARY KEY,stamp INTEGER)");}
+    public void onUpgrade(SQLiteDatabase db,int a,int b){if(a<2)db.execSQL("CREATE TABLE IF NOT EXISTS messages_seen(fingerprint TEXT PRIMARY KEY,stamp INTEGER)");if(a<3){db.execSQL("ALTER TABLE tasks ADD COLUMN prize_quantity INTEGER");db.execSQL("ALTER TABLE tasks ADD COLUMN prize_unit TEXT DEFAULT ''");}}
     void recover(){
         // Process death loses the foreground card identity; a previous click must not be replayed.
         ContentValues v=new ContentValues();v.put("state","无法确认");v.put("evidence","上次服务中断，无法恢复参与证据；为避免重复提交不自动重试");
@@ -50,6 +50,23 @@ final class Repo extends SQLiteOpenHelper {
     static class Task {long id,end;String room,state;int amount; Task(Cursor c){id=c.getLong(0);room=c.getString(1);end=c.getLong(2);amount=c.getInt(3);state=c.getString(4);}}
     List<Task> tasks(){List<Task> list=new ArrayList<>();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,room,end,amount,state FROM tasks ORDER BY CASE WHEN state IN ('中奖','未中奖','未参与','无法确认','已过期','黑名单','进房失败','已跳过') THEN 1 ELSE 0 END,end ASC",null)){while(c.moveToNext())list.add(new Task(c));}return list;}
     void state(long id,String state,String evidence){ContentValues v=new ContentValues();v.put("state",state);v.put("evidence",evidence);getWritableDatabase().update("tasks",v,"id=?",new String[]{""+id});log(state,"任务 "+id+" "+evidence);}
+    boolean win(long id,Integer quantity,String unit,String evidence,boolean correction){
+        SQLiteDatabase db=getWritableDatabase();boolean changed=false;db.beginTransaction();
+        try(Cursor c=db.rawQuery("SELECT state,evidence FROM tasks WHERE id=?",new String[]{""+id})){
+            if(!c.moveToFirst())return false;boolean already=c.getString(0).equals("中奖");
+            if(already&&!correction)return false;
+            ContentValues v=new ContentValues();v.put("state","中奖");if(quantity==null)v.putNull("prize_quantity");else v.put("prize_quantity",quantity);v.put("prize_unit",unit);
+            v.put("evidence",correction?c.getString(1)+"\n[用户截图补记] "+evidence:evidence);db.update("tasks",v,"id=?",new String[]{""+id});db.setTransactionSuccessful();changed=true;
+        }finally{db.endTransaction();}
+        if(changed)log(correction?"中奖补记":"中奖","任务 "+id+" · 实际所得 "+(quantity==null?"未识别数额":quantity+unit)+" · "+evidence);return changed;
+    }
+    int lossStreak(){List<String> states=new ArrayList<>();try(Cursor c=getReadableDatabase().rawQuery("SELECT state FROM tasks WHERE state IN ('中奖','未中奖') ORDER BY end DESC,id DESC",null)){while(c.moveToNext())states.add(c.getString(0));}return LossStreak.afterLatestWin(states);}
+    String prizeSummary(){try(Cursor c=getReadableDatabase().rawQuery("SELECT count(*),coalesce(sum(CASE WHEN prize_unit='电池' THEN prize_quantity ELSE 0 END),0),sum(CASE WHEN prize_quantity IS NULL THEN 1 ELSE 0 END) FROM tasks WHERE state='中奖'",null)){c.moveToFirst();return "中奖 "+c.getInt(0)+" 次 · 已识别实际所得 "+c.getInt(1)+" 电池 · 数额待确认 "+c.getInt(2)+" 次";}}
+    void alignEnd(Task task,long observedEnd){
+        if(Math.abs(task.end-observedEnd)<12000)return;
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT id FROM tasks WHERE room=? AND id<>? AND abs(end-?)<5000",new String[]{task.room,""+task.id,""+observedEnd})){if(c.moveToFirst())return;}
+        ContentValues v=new ContentValues();v.put("end",observedEnd);getWritableDatabase().update("tasks",v,"id=?",new String[]{""+task.id});log("面板时间校准","任务 "+task.id+" · "+task.end+" → "+observedEnd);task.end=observedEnd;
+    }
     String events(){StringBuilder b=new StringBuilder();try(Cursor c=getReadableDatabase().rawQuery("SELECT stamp,kind,detail FROM events ORDER BY id DESC LIMIT 100",null)){while(c.moveToNext())b.append(new java.text.SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(new Date(c.getLong(0)))).append(" · ").append(c.getString(1)).append("\n").append(c.getString(2)).append("\n\n");}return b.toString();}
-    String csv(){StringBuilder b=new StringBuilder("\ufeff房间号,开奖时间,电池总额,参与条件,状态,账号,证据\r\n");try(Cursor c=getReadableDatabase().rawQuery("SELECT room,end,amount,condition,state,account,evidence FROM tasks ORDER BY end",null)){while(c.moveToNext()){for(int i=0;i<7;i++){if(i>0)b.append(',');String value=c.isNull(i)?"":c.getString(i);if(i==1)value=java.time.Instant.ofEpochMilli(c.getLong(i)).atZone(java.time.ZoneId.of("Asia/Shanghai")).toString();if(value.matches("^[=+@\\-].*"))value="'"+value;b.append('"').append(value.replace("\"","\"\"")).append('"');}b.append("\r\n");}}return b.toString();}
+    String csv(){StringBuilder b=new StringBuilder("\ufeff房间号,开奖时间,电池总额,参与条件,状态,账号,实际获奖数量,奖品单位,证据\r\n");try(Cursor c=getReadableDatabase().rawQuery("SELECT room,end,amount,condition,state,account,prize_quantity,prize_unit,evidence FROM tasks ORDER BY end",null)){while(c.moveToNext()){for(int i=0;i<9;i++){if(i>0)b.append(',');String value=c.isNull(i)?"":c.getString(i);if(i==1)value=java.time.Instant.ofEpochMilli(c.getLong(i)).atZone(java.time.ZoneId.of("Asia/Shanghai")).toString();if(value.matches("^[=+@\\-].*"))value="'"+value;b.append('"').append(value.replace("\"","\"\"")).append('"');}b.append("\r\n");}}return b.toString();}
 }

@@ -21,9 +21,9 @@ public class PocketService extends AccessibilityService {
     boolean liveActivity=false,visitRecorded=false,entryConfirmed=false;
     Repo.Task current; final Set<Long> roundConfirmed=new HashSet<>(),roundSubmitted=new HashSet<>();
     int screenWidth,screenHeight,packetX=-1,packetY=-1;
-    long lossHintTask=-1;String lossHint="";
+    long lossHintTask=-1;String lossHint="";int winAmountChecks;
     WindowManager wm;View overlay;TextView overlayText;PowerManager.WakeLock wake;
-    final Runnable tick=new Runnable(){public void run(){try{step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}long now=System.currentTimeMillis();h.postDelayed(this,running&&current!=null&&now>current.end-4000&&now<current.end+12000?500:1800);}};
+    final Runnable tick=new Runnable(){public void run(){try{step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}h.postDelayed(this,running&&current!=null?500:1000);}};
     @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();wm=(WindowManager)getSystemService(WINDOW_SERVICE);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){
         if(roomNavigator!=null)roomNavigator.event(e);
@@ -83,7 +83,7 @@ public class PocketService extends AccessibilityService {
             }
             status=room.isEmpty()?"监听 QQ · 等待进房时间":"留在直播间 · 等待下一任务";return;
         }
-        if(choosePrimaryApp()){nextAction=now+1600;return;}
+        if(choosePrimaryApp()){nextAction=now+650;return;}
         for(AccessibilityWindowInfo win:getWindows()){AccessibilityNodeInfo chooser=win.getRoot();if(chooser!=null&&"com.miui.securitycore".contentEquals(chooser.getPackageName()==null?"":chooser.getPackageName())){status="等待系统应用选择 · 不重复启动房间链接";if(now-entered>90000){capture("app-chooser");stop("无法确认主应用选择，请人工处理系统选择框",false);}return;}}
         // Only manipulate Bilibili. Other foreground apps pause the workflow.
         AccessibilityNodeInfo root=biliRoot();String pkg=root==null?"":String.valueOf(root.getPackageName());
@@ -98,6 +98,10 @@ public class PocketService extends AccessibilityService {
         if(!visitRecorded){firstVisit=repo.visit(room);visitRecorded=true;}
         int biliWindows=0;for(AccessibilityWindowInfo win:getWindows()){AccessibilityNodeInfo node=win.getRoot();if(node!=null&&"tv.danmaku.bili".contentEquals(node.getPackageName()==null?"":node.getPackageName()))biliWindows++;}
         if(biliWindows>1){status="检测到双小窗口 · 请先完成多窗口路由验证";return;}
+        Rect display=wm.getMaximumWindowMetrics().getBounds();
+        Screen nativeScreen=Screen.nativePanel(nodes(),display.width(),display.height());
+        boolean nativeAction=nativeScreen.panelExact("抢","抢红包","立即参与")!=null||nativeScreen.panelHas("已参与")||nativeScreen.panelHas("开奖")&&(submitted||confirmed)||nativeScreen.amount()<=20;
+        if(!nativeScreen.won()&&(nativeScreen.panelHas("发的红包")&&nativeScreen.amount()>0&&nativeAction||nativeScreen.labels.stream().anyMatch(l->ResultEvidence.loss(l.text)))){process(nativeScreen);return;}
         busy=true;long g=generation;
         takeScreenshot(Display.DEFAULT_DISPLAY,getMainExecutor(),new TakeScreenshotCallback(){
             public void onSuccess(ScreenshotResult result){
@@ -109,19 +113,19 @@ public class PocketService extends AccessibilityService {
                 if(!running||g!=generation){bitmap.recycle();busy=false;return;}
                 Screen.read(bitmap,s->{busy=false;if(running&&g==generation)process(s);},e->{busy=false;stop("文字识别失败："+e.getMessage(),true);});
             }
-            public void onFailure(int code){busy=false;stop("截图失败 "+code+"，检查无障碍权限或安全窗口",true);}
+            public void onFailure(int code){busy=false;if(code==ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT){nextAction=System.currentTimeMillis()+400;return;}stop("截图失败 "+code+"，检查无障碍权限或安全窗口",true);}
         });
     }
     void enter(Repo.Task t){
         if(p.b("failed."+java.time.LocalDate.now()+"."+t.room,false)){repo.state(t.id,"已跳过","同日两次进房失败");return;}
         if(!room.equals(t.room)){visitRecorded=false;firstVisit=false;packetX=-1;packetY=-1;openRoom(t.room);room=t.room;}
-        current=t;entered=System.currentTimeMillis();enterAttempts=1;scans=0;lastResultRefresh=0;lossHintTask=-1;lossHint="";confirmed=roundConfirmed.contains(t.id);submitted=roundSubmitted.contains(t.id);visitSent=false;
-        repo.state(t.id,"进房中","");status="进入 "+room;nextAction=entered+5000;
+        current=t;entered=System.currentTimeMillis();enterAttempts=1;scans=0;winAmountChecks=0;lastResultRefresh=0;lossHintTask=-1;lossHint="";confirmed=roundConfirmed.contains(t.id);submitted=roundSubmitted.contains(t.id);visitSent=false;
+        repo.state(t.id,"进房中","");status="进入 "+room;nextAction=entered+1200;
     }
     void openRoom(String id){
         liveActivity=false;entryConfirmed=false;Intent i=new Intent(Intent.ACTION_VIEW,Uri.parse("bilibili://live/"+id));
-        // Explicit owner-profile routing avoids HyperOS intercepting an implicit URI
-        // with its primary/clone chooser. Resolve the current installed Bili handler.
+        // Resolve the installed Bili handler. HyperOS may still show its clone chooser,
+        // which choosePrimaryApp handles using the user-confirmed left/main choice.
         i.setPackage("tv.danmaku.bili");android.content.pm.ResolveInfo target=getPackageManager().resolveActivity(i,0);
         if(target==null||target.activityInfo==null||!"tv.danmaku.bili".equals(target.activityInfo.packageName)){stop("无法确认B站房间链接处理入口",false);return;}
         i.setComponent(new ComponentName(target.activityInfo.packageName,target.activityInfo.name));i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);startActivity(i);
@@ -143,12 +147,17 @@ public class PocketService extends AccessibilityService {
         for(Screen.Label l:s.labels)if(l.rect.centerX()>s.width*.15&&l.rect.centerX()<s.width*.85&&l.rect.centerY()>s.height*.20&&l.text.replaceAll("\\s","").matches("^(确认支付|立即支付|去充值|充值|余额不足|确认购买|开通大航海)$")){
             capture("payment-stop");stop("遇到其他付费/充值确认："+l.text,true);return;
         }
+        if(s.won()&&confirmed&&now>=current.end-3000){
+            Integer battery=s.prizeBattery();if(battery==null&&++winAmountChecks<4){status="中奖 · 等待奖品数额加载";nextAction=now+500;return;}capture("win");
+            if(repo.win(current.id,battery,battery==null?"":"电池",s.panelText()+"\n独立奖品识别："+(battery==null?"数额待确认":battery+"电池"),false)){
+                p.put("losses","0");p.put("sleepUntil","0");status="中奖 "+(battery==null?"（金额待确认）":battery+"电池")+" · 连续未中已清零";
+                long g=generation;busy=true;Screen.Label accept=s.panelExact("开心收下","收下奖励");
+                h.postDelayed(()->{if(!running||g!=generation)return;if(accept!=null)tap(accept.rect.centerX(),accept.rect.centerY());h.postDelayed(()->{if(!running||g!=generation)return;busy=false;if(firstVisit)sendActions("win",accept!=null);finishRound();},500);},1100);
+                return;
+            }finishRound();return;
+        }
         if(now>=current.end){
             if(now-lastDrawLog>2500){lastDrawLog=now;repo.log("开奖面板",s.panelText().isEmpty()?"没有可确认的红包文字":s.panelText());}
-            if(s.panelHas("恭喜你获奖啦")||s.panelHas("恭喜中奖")){
-                capture("win");repo.state(current.id,"中奖",s.panelText());p.put("losses","0");
-                if(firstVisit)sendActions("win");finishRound();return;
-            }
             if(s.panelHas("未参与")){repo.state(current.id,"未参与",s.panelText());finishRound();return;}
             boolean loss=lossHintTask==current.id;
             if(ResultEvidence.inWindow(now,current.end,confirmed)){
@@ -170,15 +179,16 @@ public class PocketService extends AccessibilityService {
         }
         if(confirmed){status="已参与 · 等待开奖";if(!s.panelHas("发的红包")&&!s.panelHas("开奖")){openPacket();nextAction=now+3000;}return;}
         if(s.panelHas("已参与")||(submitted&&s.panelHas("开奖")&&!s.panelHas("未参与")&&s.panelExact("抢")==null)){
+            alignConfirmedRound(s,now);
             confirmed=true;roundConfirmed.add(current.id);repo.state(current.id,"已参与",s.panelText());status="已参与 · 保持红包面板";
             if(firstVisit&&!visitSent){visitSent=true;sendActions("join");}return;
         }
         if(s.panelHas("发的红包")||s.panelHas("共")&&s.panelHas("开奖")){
             int amount=s.amount();
             if(amount<=20&&amount>=0){repo.log("跳过20电池","房间 "+room);swipe();nextAction=now+1800;if(++scans>8){repo.state(current.id,"已跳过","未找到超过20电池的匹配红包");finishRound();}return;}
-            // Match the displayed countdown to this task before any submission.
-            int secs=s.roundSeconds();boolean matches=secs>=0&&Math.abs(now+secs*1000-current.end)<12000;
-            if(amount!=current.amount||!matches){status="核对红包金额/倒计时";if(++scans<=8){swipe();nextAction=now+1800;}else {repo.state(current.id,"无法确认","面板金额或时间无法与任务匹配，未提交");finishRound();}return;}
+            // Only this card's own countdown can identify its draw; the header can show another card.
+            int secs=s.panelSeconds();
+            if(!ClaimDecision.matchingCard(current.amount,amount,secs,current.end,now)){status="核对当前红包卡片";if(++scans<=8){swipe();nextAction=now+450;}else {repo.state(current.id,"无法确认","面板金额或时间无法与任务匹配，未提交");finishRound();}return;}
             Screen.Label grab=s.panelExact("抢","抢红包","立即参与");
             if(grab!=null&&!submitted){
                 String panel=s.panelText().replaceAll("\\s","");
@@ -188,12 +198,19 @@ public class PocketService extends AccessibilityService {
                     if(p.b("membershipSpent."+room,false)){repo.state(current.id,"已跳过","此房间已尝试过1电池入团，不再次付费");finishRound();return;}
                     p.put("membershipSpent."+room,true);repo.log("入团授权使用","房间 "+room+"，本房间仅此次，1电池上限");
                 }
-                submitted=true;roundSubmitted.add(current.id);tap(grab.rect.centerX(),grab.rect.centerY());repo.state(current.id,"已点击待确认",s.panelText());nextAction=now+2500;status="已点击 · 核对参与状态";capture("claim");return;
+                submitted=true;roundSubmitted.add(current.id);tap(grab.rect.centerX(),grab.rect.centerY());repo.state(current.id,"已点击待确认",s.panelText());nextAction=now+650;status="已点击 · 核对参与状态";capture("claim");return;
             }
             status=submitted?"提交后未确认 · 不重复点击":"未发现可用的抢按钮";return;
         }
-        openPacket();nextAction=now+2000;
+        openPacket();nextAction=now+500;
         if(++scans>12){repo.state(current.id,"无法确认","未找到红包面板");finishRound();}
+    }
+    void alignConfirmedRound(Screen screen,long now){
+        int seconds=screen.panelSeconds();if(seconds<0||seconds>86400)return;long end=now+seconds*1000L;
+        if(Math.abs(end-current.end)<12000)return;
+        for(Repo.Task task:repo.tasks())if(task.id!=current.id&&task.room.equals(current.room)&&task.amount==screen.amount()&&Math.abs(task.end-end)<12000&&task.state.equals("等待")){
+            long old=current.id;repo.state(old,"等待","已参与卡片对应同房另一开奖任务，原任务继续排队");roundSubmitted.remove(old);current=task;roundSubmitted.add(task.id);return;
+        }repo.alignEnd(current,end);
     }
     void finishRound(){
         if(busy){pendingFinish=true;return;}
@@ -205,7 +222,7 @@ public class PocketService extends AccessibilityService {
     }
     void openPacket(){if(packetX>=0&&packetY>=0)tap(packetX,packetY);else tapRelative(p.s("packetPoint","0.08,0.17"));}
     void closePacket(){tapRelative(p.s("packetClose","0.782,0.479"));}
-    void swipe(){Path path=new Path();android.util.DisplayMetrics d=getResources().getDisplayMetrics();path.moveTo(d.widthPixels*.82f,d.heightPixels*.72f);path.lineTo(d.widthPixels*.22f,d.heightPixels*.72f);dispatchGesture(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path,0,550)).build(),null,null);}
+    void swipe(){Path path=new Path();Rect d=wm.getMaximumWindowMetrics().getBounds();path.moveTo(d.width()*.82f,d.height()*.72f);path.lineTo(d.width()*.22f,d.height()*.72f);dispatchGesture(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path,0,280)).build(),null,null);}
     void tapRelative(String value){try{String[] a=value.split(",");Rect display=((WindowManager)getSystemService(WINDOW_SERVICE)).getMaximumWindowMetrics().getBounds();int width=screenWidth>0?screenWidth:display.width(),height=screenHeight>0?screenHeight:display.height();tap((int)(Float.parseFloat(a[0])*width),(int)(Float.parseFloat(a[1])*height));}catch(Exception e){stop("坐标设置无效",true);}}
     void tap(int x,int y){Path path=new Path();path.moveTo(x,y);dispatchGesture(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path,0,80)).build(),null,null);}
     AccessibilityNodeInfo biliRoot(){for(AccessibilityWindowInfo win:getWindows())if(win.getType()==AccessibilityWindowInfo.TYPE_APPLICATION){AccessibilityNodeInfo root=win.getRoot();if(root!=null)return "tv.danmaku.bili".contentEquals(root.getPackageName()==null?"":root.getPackageName())?root:null;}return null;}
@@ -236,14 +253,15 @@ public class PocketService extends AccessibilityService {
     void walk(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> out,int depth){if(n==null||depth>70||out.size()>=3000)return;out.add(n);for(int i=0;i<n.getChildCount()&&out.size()<3000;i++){AccessibilityNodeInfo child=n.getChild(i);if(child!=null&&!child.equals(n))walk(child,out,depth+1);}}
     boolean clickNode(String text){for(AccessibilityNodeInfo n:nodes()){String t=String.valueOf(n.getText())+" "+String.valueOf(n.getContentDescription());if(t.contains(text)&&n.isVisibleToUser()){AccessibilityNodeInfo a=n;for(int depth=0;a!=null&&depth<8;depth++){if(a.isClickable()&&a.performAction(AccessibilityNodeInfo.ACTION_CLICK))return true;AccessibilityNodeInfo parent=a.getParent();if(a.equals(parent))break;a=parent;}}}return false;}
     boolean clickId(String id){for(AccessibilityNodeInfo n:nodes())if(id.equals(n.getViewIdResourceName())&&n.isVisibleToUser()){Rect b=new Rect();n.getBoundsInScreen(b);if(b.width()>0&&b.height()>0){tap(b.centerX(),b.centerY());return true;}}return false;}
-    void sendActions(String event){
+    void sendActions(String event){sendActions(event,false);}
+    void sendActions(String event,boolean panelClosed){
         if(!p.b("messages",true))return;
         String raw=p.s(event+"Actions",event.equals("join")?"text:来了~":event.equals("win")?"text:谢谢老板":"");
         List<String> actions=new ArrayList<>();for(String a:raw.split("\n"))if(!a.trim().isEmpty())actions.add(a.trim());
         if(actions.isEmpty())return;
         long g=generation;busy=true;
         // Close the packet using a configured close target, never Android BACK.
-        closePacket();h.postDelayed(()->action(actions,0,g),1000);
+        if(!panelClosed)closePacket();h.postDelayed(()->action(actions,0,g),panelClosed?200:500);
     }
     void action(List<String> actions,int i,long g){
         if(!running||g!=generation){busy=false;return;}
