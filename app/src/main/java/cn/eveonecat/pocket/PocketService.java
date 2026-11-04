@@ -237,6 +237,45 @@ public class PocketService extends AccessibilityService {
         repo.log("小窗放大测试",(left?"左":"右")+target.toShortString());
         tap(target.centerX(),target.centerY());h.postDelayed(()->windowReport(),1800);
     }
+    java.util.Map<Integer,Rect> floatingRects(){
+        java.util.Map<Integer,Rect> result=new java.util.HashMap<>();
+        for(AccessibilityWindowInfo win:getWindows()){
+            AccessibilityNodeInfo n=win.getRoot();if(n==null||!"tv.danmaku.bili".contentEquals(n.getPackageName()==null?"":n.getPackageName()))continue;
+            Rect b=new Rect();win.getBoundsInScreen(b);result.put(win.getId(),b);
+        }return result;
+    }
+    public void previewFloatingCycle(boolean left){
+        if(running){Toast.makeText(this,"请先停止任务",Toast.LENGTH_LONG).show();return;}
+        java.util.Map<Integer,Rect> before=floatingRects();
+        if(before.size()!=2){repo.log("窗口切换失败","需要两个可读取的B站窗口");return;}
+        java.util.List<Integer> ids=new java.util.ArrayList<>(before.keySet());ids.sort(java.util.Comparator.comparingInt(id->before.get(id).centerX()));
+        int selected=ids.get(left?0:1),other=ids.get(left?1:0);Rect mini=before.get(selected);
+        if(mini.width()>getResources().getDisplayMetrics().widthPixels*.45){repo.log("窗口切换失败","请先把两个窗口恢复为迷你窗");return;}
+        tap(mini.centerX(),mini.centerY());
+        h.postDelayed(()->{
+            java.util.Map<Integer,Rect> expanded=floatingRects();Rect large=expanded.get(selected);
+            if(large==null||large.width()<mini.width()*1.4||!expanded.containsKey(other)){repo.log("窗口切换失败","未确认目标放大或另一窗口已不可读");windowReport();return;}
+            repo.log("窗口已放大",selected+" "+large.toShortString());
+            // HyperOS window decoration sits just outside the app's content frame.
+            // Drag only the upper decoration, never the Bilibili content or Android BACK.
+            float startX=large.centerX(),startY=Math.max(1,large.top-18);
+            android.util.DisplayMetrics d=getResources().getDisplayMetrics();
+            float endX=d.widthPixels*(left?.12f:.88f),endY=d.heightPixels*.16f;
+            Path path=new Path();path.moveTo(startX,startY);path.lineTo(startX,startY);path.lineTo(endX,endY);
+            h.postDelayed(()->{
+                if(running){repo.log("窗口测试取消","任务已开始运行");return;}
+                boolean accepted=dispatchGesture(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path,0,850)).build(),null,null);
+                if(!accepted){repo.log("窗口缩小失败","系统未接受手势");return;}
+                h.postDelayed(()->{
+                    java.util.Map<Integer,Rect> after=floatingRects();Rect small=after.get(selected);
+                    if(small!=null&&small.width()<=mini.width()*1.25&&after.containsKey(other)){
+                        p.put(left?"leftCycleVerified":"rightCycleVerified",true);repo.log("窗口循环成功",selected+" 放大→缩小，另一窗口仍可读取 "+small.toShortString());
+                    }else{repo.log("窗口缩小待标定","手势已执行但没有确认缩小；需要按本机实际控制栏调整");}
+                    windowReport();
+                },2000);
+            },2500);
+        },2000);
+    }
     public void recordEmoji(){
         stop("表情路径录制",false);
         Intent launch=getPackageManager().getLaunchIntentForPackage("tv.danmaku.bili");if(launch!=null){launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);startActivity(launch);}
