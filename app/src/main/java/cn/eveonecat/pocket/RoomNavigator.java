@@ -76,11 +76,43 @@ final class RoomNavigator {
             for(AccessibilityNodeInfo n:visible)if((text(n).equals("直播")||text(n).startsWith("直播("))&&click(n)){stage=3;liveTabSelected=true;log("已选择直播搜索");later(1500);return;}
             stage=3;later(500);return;
         }
+        if(stage==4){
+            for(AccessibilityNodeInfo n:visible)if(id(n).endsWith("/live_send_danmaku")){
+                log("已读取到目标窗口的直播间控件；请核对账号与房间号。未点击红包或发送消息。");cancelled=true;service.windowReport();return;
+            }
+            later(1000);return;
+        }
         // Prefer an explicitly labelled room jump. Do not select an arbitrary video/user result.
         for(AccessibilityNodeInfo n:visible){String t=text(n);
             if((t.equals("进入直播间")||t.equals("前往直播间")||t.equals("进入房间"))&&click(n)){stage=4;log("已点击直播间入口，等待目标窗口确认");later(1800);return;}
         }
         if(stage==3){
+            List<AccessibilityNodeInfo> roomLabels=new ArrayList<>();
+            for(AccessibilityNodeInfo n:visible)if(!n.isEditable()&&RoomResultMatch.matches(text(n),room)){
+                Rect b=new Rect();n.getBoundsInScreen(b);
+                if(b.width()>0&&b.height()>0&&bounds.contains(b.centerX(),b.centerY())&&b.top>bounds.top+bounds.height()*.10)roomLabels.add(n);
+            }
+            if(!roomLabels.isEmpty()){
+                // Nested accessibility containers may repeat the same text; prefer the smallest label.
+                roomLabels.sort(Comparator.comparingLong(n->{Rect r=new Rect();n.getBoundsInScreen(r);return r.width()*(long)r.height();}));
+                AccessibilityNodeInfo label=roomLabels.get(0);Rect b=new Rect();label.getBoundsInScreen(b);
+                boolean activated=false;
+                for(AccessibilityNodeInfo a=label;a!=null;a=a.getParent()){
+                    Rect box=new Rect();a.getBoundsInScreen(box);
+                    if(a.isClickable()&&box.height()<bounds.height()*.65&&a.performAction(AccessibilityNodeInfo.ACTION_CLICK)){activated=true;break;}
+                }
+                if(!activated){
+                    // A coordinate fallback is allowed only on the exact verified room-number label.
+                    boolean obscured=false;
+                    for(AccessibilityWindowInfo w:service.getWindows()){
+                        Rect area=new Rect();w.getBoundsInScreen(area);
+                        if(area.contains(b.centerX(),b.centerY())){obscured=w.getId()!=window;break;}
+                    }
+                    if(obscured){log("目标房间号被其他窗口遮挡，未点击");cancelled=true;return;}
+                    service.tap(b.centerX(),b.centerY());
+                }
+                stage=4;log("已点击房间号完全匹配的直播卡片："+room);later(1800);return;
+            }
             LinkedHashMap<String,AccessibilityNodeInfo> covers=new LinkedHashMap<>();
             boolean liveResults=liveTabSelected;for(AccessibilityNodeInfo n:visible)if(text(n).equals("直播")&&n.isSelected())liveResults=true;
             for(AccessibilityNodeInfo n:visible){Rect b=new Rect();n.getBoundsInScreen(b);
