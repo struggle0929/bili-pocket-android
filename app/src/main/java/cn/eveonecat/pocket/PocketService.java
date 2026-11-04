@@ -244,6 +244,48 @@ public class PocketService extends AccessibilityService {
             Rect b=new Rect();win.getBoundsInScreen(b);result.put(win.getId(),b);
         }return result;
     }
+    public void previewRoomRoute(String target,boolean backup){
+        if(running){Toast.makeText(this,"请先停止任务",Toast.LENGTH_LONG).show();return;}
+        if(!target.matches("[1-9][0-9]{0,14}")||PacketParser.blacklisted(p.s("blacklist",""),target)){repo.log("进房验证取消","房间号无效或在黑名单");return;}
+        Map<Integer,Rect> before=floatingRects();
+        if(before.size()!=2){repo.log("进房验证取消","需要两个可读取的B站窗口");return;}
+        List<Integer> ids=new ArrayList<>(before.keySet());ids.sort(Comparator.comparingInt(id->before.get(id).centerX()));
+        int primary=ids.get(p.b("primaryLeft",true)?0:1),secondary=ids.get(p.b("primaryLeft",true)?1:0);
+        int expected=backup?secondary:primary,other=backup?primary:secondary;
+        repo.log("进房路由验证",(backup?"备用":"主")+"账号，目标窗口 "+expected+"，房间 "+target);
+        if(backup){
+            boolean clicked=false;
+            for(AccessibilityWindowInfo win:getWindows()){
+                AccessibilityNodeInfo root=win.getRoot();if(root==null||!"com.tencent.mobileqq".contentEquals(root.getPackageName()==null?"":root.getPackageName()))continue;
+                List<AccessibilityNodeInfo> qq=new ArrayList<>();walk(root,qq);
+                String group=p.s("group","B站直播区游戏群");boolean correctGroup=false;
+                for(AccessibilityNodeInfo n:qq)if(String.valueOf(n.getText()).contains(group))correctGroup=true;
+                if(group.isBlank()||!correctGroup)continue;
+                for(AccessibilityNodeInfo n:qq){
+                    CharSequence raw=n.getText();if(!(raw instanceof android.text.Spanned))continue;
+                    android.text.Spanned spanned=(android.text.Spanned)raw;
+                    for(android.text.style.URLSpan span:spanned.getSpans(0,spanned.length(),android.text.style.URLSpan.class)){
+                        if(!span.getClass().getName().contains("Accessibility"))continue;
+                        String url=span.getURL();
+                        if(url!=null&&url.matches("https?://live\\.bilibili\\.com/"+target+"(?:[/?#].*)?")){
+                            span.onClick(new View(this));clicked=true;break;
+                        }
+                    }if(clicked)break;
+                }if(clicked)break;
+            }
+            if(!clicked){repo.log("备用路由待验证","目标QQ群当前未暴露该房间的可点击链接；未尝试跨账号启动");return;}
+        }else openRoom(target);
+        h.postDelayed(()->{
+            Map<Integer,Rect> after=floatingRects();boolean expectedRemains=after.containsKey(expected),otherRemains=after.containsKey(other);
+            List<Integer> added=new ArrayList<>(after.keySet());added.removeAll(before.keySet());
+            String detail="目标旧窗口="+expected+"，另一旧窗口="+other+"，新增="+added;
+            // Window replacement alone is not room/account proof; require manual live-room confirmation.
+            if(otherRemains&&(!expectedRemains&&added.size()==1||expectedRemains&&added.isEmpty())){
+                repo.log("进房路由候选匹配",detail+"；请核对账号昵称与房间号，尚未自动抢红包");
+            }else repo.log("进房路由不匹配",detail+"；不会执行抢红包或发送消息");
+            windowReport();
+        },4500);
+    }
     public void previewFloatingCycle(boolean left){
         if(running){Toast.makeText(this,"请先停止任务",Toast.LENGTH_LONG).show();return;}
         java.util.Map<Integer,Rect> before=floatingRects();
