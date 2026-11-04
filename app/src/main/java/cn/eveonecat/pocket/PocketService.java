@@ -14,6 +14,7 @@ import java.io.*;
 
 public class PocketService extends AccessibilityService {
     public static PocketService instance;
+    RoomNavigator roomNavigator;
     final Handler h=new Handler(Looper.getMainLooper());
     Prefs p;Repo repo; boolean running,busy,firstVisit,confirmed,submitted,visitSent,pendingFinish;
     long generation=0,nextAction=0,entered=0,lastEvidence=0;int enterAttempts=0,scans=0;String status="待机",room="";
@@ -23,6 +24,7 @@ public class PocketService extends AccessibilityService {
     final Runnable tick=new Runnable(){public void run(){try{step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}h.postDelayed(this,1800);}};
     @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();wm=(WindowManager)getSystemService(WINDOW_SERVICE);h.post(tick);}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){
+        if(roomNavigator!=null)roomNavigator.event(e);
         if(e.getEventType()==AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED&&"tv.danmaku.bili".contentEquals(e.getPackageName()==null?"":e.getPackageName())){
             String cls=String.valueOf(e.getClassName());if(cls.contains("LiveRoomActivity"))liveActivity=true;else if(cls.contains("MainActivity"))liveActivity=false;
         }
@@ -32,6 +34,7 @@ public class PocketService extends AccessibilityService {
     boolean blocked(){return !p.s("verificationLock","").isEmpty();}
     public void start(){
         if(running)return;
+        if(roomNavigator!=null)roomNavigator.cancel();
         if(blocked()){status="验证锁定：请在设置确认处理后解除";return;}
         if(!notificationEnabled()){status="请先授权 QQ 通知读取";return;}
         p.put("listen",true);running=true;generation++;busy=false;nextAction=0;current=null;room="";status="监听 QQ · 等待任务";
@@ -41,6 +44,7 @@ public class PocketService extends AccessibilityService {
     }
     boolean notificationEnabled(){String v=android.provider.Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");return v!=null&&v.contains(getPackageName());}
     public void stop(String reason,boolean lock){
+        if(roomNavigator!=null)roomNavigator.cancel();
         running=false;busy=false;pendingFinish=false;generation++;status=reason;if(p!=null){p.put("listen",false);p.put("sleepUntil","0");if(lock)p.put("verificationLock",reason);}
         if(repo!=null){repo.log("停止",reason);if(current!=null){repo.state(current.id,"无法确认",reason);current=null;}}if(overlay!=null){wm.removeView(overlay);overlay=null;}if(wake!=null&&wake.isHeld())wake.release();
     }
@@ -253,38 +257,8 @@ public class PocketService extends AccessibilityService {
         int primary=ids.get(p.b("primaryLeft",true)?0:1),secondary=ids.get(p.b("primaryLeft",true)?1:0);
         int expected=backup?secondary:primary,other=backup?primary:secondary;
         repo.log("进房路由验证",(backup?"备用":"主")+"账号，目标窗口 "+expected+"，房间 "+target);
-        if(backup){
-            boolean clicked=false;
-            for(AccessibilityWindowInfo win:getWindows()){
-                AccessibilityNodeInfo root=win.getRoot();if(root==null||!"com.tencent.mobileqq".contentEquals(root.getPackageName()==null?"":root.getPackageName()))continue;
-                List<AccessibilityNodeInfo> qq=new ArrayList<>();walk(root,qq);
-                String group=p.s("group","B站直播区游戏群");boolean correctGroup=false;
-                for(AccessibilityNodeInfo n:qq)if(String.valueOf(n.getText()).contains(group))correctGroup=true;
-                if(group.isBlank()||!correctGroup)continue;
-                for(AccessibilityNodeInfo n:qq){
-                    CharSequence raw=n.getText();if(!(raw instanceof android.text.Spanned))continue;
-                    android.text.Spanned spanned=(android.text.Spanned)raw;
-                    for(android.text.style.URLSpan span:spanned.getSpans(0,spanned.length(),android.text.style.URLSpan.class)){
-                        if(!span.getClass().getName().contains("Accessibility"))continue;
-                        String url=span.getURL();
-                        if(url!=null&&url.matches("https?://live\\.bilibili\\.com/"+target+"(?:[/?#].*)?")){
-                            span.onClick(new View(this));clicked=true;break;
-                        }
-                    }if(clicked)break;
-                }if(clicked)break;
-            }
-            if(!clicked){repo.log("备用路由待验证","目标QQ群当前未暴露该房间的可点击链接；未尝试跨账号启动");return;}
-        }else openRoom(target);
-        h.postDelayed(()->{
-            Map<Integer,Rect> after=floatingRects();boolean expectedRemains=after.containsKey(expected),otherRemains=after.containsKey(other);
-            List<Integer> added=new ArrayList<>(after.keySet());added.removeAll(before.keySet());
-            String detail="目标旧窗口="+expected+"，另一旧窗口="+other+"，新增="+added;
-            // Window replacement alone is not room/account proof; require manual live-room confirmation.
-            if(otherRemains&&(!expectedRemains&&added.size()==1||expectedRemains&&added.isEmpty())){
-                repo.log("进房路由候选匹配",detail+"；请核对账号昵称与房间号，尚未自动抢红包");
-            }else repo.log("进房路由不匹配",detail+"；不会执行抢红包或发送消息");
-            windowReport();
-        },4500);
+        roomNavigator=new RoomNavigator(this,target,backup,expected,other,before.get(expected));
+        roomNavigator.start();
     }
     public void previewFloatingCycle(boolean left){
         if(running){Toast.makeText(this,"请先停止任务",Toast.LENGTH_LONG).show();return;}
