@@ -24,6 +24,7 @@ public class PocketService extends AccessibilityService {
     RoomStay stay=new RoomStay(0);boolean leaving,homeReady,mainActivityObserved;long exitStarted;int exitAttempts;Repo.Task retryEntry;
     final Map<Long,TaskTiming> timings=new HashMap<>();
     WebPoolMonitor web;
+    long nextWaitingTap;boolean waitingGesture;final Random waitingRandom=new Random();
     WindowManager wm;View overlay;TextView overlayText;PowerManager.WakeLock wake;
     final Runnable tick=new Runnable(){public void run(){try{if(web!=null)web.sync();step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}h.postDelayed(this,running&&current!=null?500:1000);}};
     @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();room=p.s("activeRoom","");stay=new RoomStay(p.l("roomLeaveAt",0));wm=(WindowManager)getSystemService(WINDOW_SERVICE);web=new WebPoolMonitor(this,h);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
@@ -45,7 +46,7 @@ public class PocketService extends AccessibilityService {
         if(blocked()){status="验证锁定：请在设置确认处理后解除";return;}
         if(!p.webMode()&&!notificationEnabled()){status="请到设置授权 QQ 通知读取";return;}
         try{p.sourceKey();}catch(IllegalArgumentException e){status=e.getMessage();return;}
-        p.put("listen",true);running=true;generation++;busy=false;nextAction=0;current=null;retryEntry=null;leaving=false;homeReady=false;pendingFinish=false;status=(p.webMode()?"监控网页":"监听 QQ")+" · 等待任务";
+        p.put("listen",true);running=true;generation++;busy=false;waitingGesture=false;nextWaitingTap=0;nextAction=0;current=null;retryEntry=null;leaving=false;homeReady=false;pendingFinish=false;status=(p.webMode()?"监控网页":"监听 QQ")+" · 等待任务";
         if(p.s("joinActions","emoji:EveOneCat2").equals("emoji:EveOneCat2"))p.put("joinActions","text:来了~");
         showOverlay();
         PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);wake=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"pocket:runner");wake.acquire(4*60*60*1000L);
@@ -54,7 +55,7 @@ public class PocketService extends AccessibilityService {
     boolean notificationEnabled(){String v=android.provider.Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");return v!=null&&v.contains(getPackageName());}
     public void stop(String reason,boolean lock){
         if(roomNavigator!=null)roomNavigator.cancel();
-        running=false;busy=false;pendingFinish=false;leaving=false;homeReady=false;generation++;status=reason;if(p!=null){p.put("listen",false);p.put("sleepUntil","0");if(lock)p.put("verificationLock",reason);}
+        running=false;busy=false;waitingGesture=false;pendingFinish=false;leaving=false;homeReady=false;generation++;status=reason;if(p!=null){p.put("listen",false);p.put("sleepUntil","0");if(lock)p.put("verificationLock",reason);}
         if(repo!=null){repo.log("停止",reason);if(current!=null){repo.state(current.id,"无法确认",reason);current=null;}if(retryEntry!=null){repo.state(retryEntry.id,"无法确认",reason);retryEntry=null;}}if(overlay!=null){wm.removeView(overlay);overlay=null;}if(wake!=null&&wake.isHeld())wake.release();
     }
     void showOverlay(){
@@ -190,7 +191,7 @@ public class PocketService extends AccessibilityService {
             }
             openPacket();nextAction=now+2200;return;
         }
-        if(confirmed){status="已参与 · 等待开奖";if(!s.panelHas("发的红包")&&!s.panelHas("开奖")){openPacket();nextAction=now+3000;}return;}
+        if(confirmed){status="已参与 · 等待开奖";if(!s.panelHas("发的红包")&&!s.panelHas("开奖")){openPacket();nextAction=now+3000;}else waitingTaps(s,now);return;}
         if(s.panelHas("已参与")||(submitted&&s.panelHas("开奖")&&!s.panelHas("未参与")&&s.panelExact("抢")==null)){
             alignConfirmedRound(s,now);
             confirmed=true;roundConfirmed.add(current.id);repo.state(current.id,"已参与",s.panelText());status="已参与 · 保持红包面板";
@@ -224,6 +225,26 @@ public class PocketService extends AccessibilityService {
         for(Repo.Task task:repo.tasksForSource(p.sourceKey()))if(task.id!=current.id&&task.room.equals(current.room)&&task.amount==screen.amount()&&Math.abs(task.end-end)<12000&&task.state.equals("等待")){
             long old=current.id;repo.state(old,"等待","已参与卡片对应同房另一开奖任务，原任务继续排队");roundSubmitted.remove(old);current=task;roundSubmitted.add(task.id);return;
         }repo.alignEnd(current,end);
+    }
+    void waitingTaps(Screen screen,long now){
+        boolean matching=ClaimDecision.matchingCard(current.amount,screen.amount(),screen.panelSeconds(),current.end,now);
+        boolean visible=screen.panelHas("发的红包")&&(screen.panelHas("已参与")||screen.panelHas("开奖"))&&screen.panelExact("抢","抢红包","立即参与")==null;
+        if(waitingGesture||!WaitingTapPlan.allowed(p.b("mysticMultiTap",false),confirmed,matching,visible,now,current.end,nextWaitingTap))return;
+        WaitingTapPlan.Plan plan=screen.waitingTapPlan(Math.min(8,GestureDescription.getMaxStrokeCount()),waitingRandom);if(plan==null)return;
+        // Separate short bursts keep each gesture within Android's stroke count limit.
+        nextWaitingTap=now+1800;waitingBurst(plan,0,generation,current.id);
+    }
+    void waitingBurst(WaitingTapPlan.Plan plan,int round,long epoch,long taskId){
+        if(!running||generation!=epoch||current==null||current.id!=taskId||!confirmed||!p.b("mysticMultiTap",false)||System.currentTimeMillis()>=current.end-3000){waitingGesture=false;busy=false;return;}
+        if(round>=plan.rounds()){waitingGesture=false;busy=false;return;}
+        AccessibilityNodeInfo root=getRootInActiveWindow();if(root==null||!"tv.danmaku.bili".contentEquals(root.getPackageName()==null?"":root.getPackageName())){waitingGesture=false;busy=false;return;}
+        GestureDescription.Builder builder=new GestureDescription.Builder();for(WaitingTapPlan.Point point:plan.points()){Path path=new Path();path.moveTo(point.x(),point.y());builder.addStroke(new GestureDescription.StrokeDescription(path,0,plan.duration()));}
+        waitingGesture=true;busy=true;
+        boolean accepted=dispatchGesture(builder.build(),new GestureResultCallback(){
+            @Override public void onCompleted(GestureDescription gesture){if(generation!=epoch)return;h.postDelayed(()->{if(generation==epoch)waitingBurst(plan,round+1,epoch,taskId);},plan.pause());}
+            @Override public void onCancelled(GestureDescription gesture){if(generation!=epoch)return;waitingGesture=false;busy=false;repo.log("多指点击","系统取消手势，本轮停止");}
+        },h);
+        if(!accepted){waitingGesture=false;busy=false;nextWaitingTap=System.currentTimeMillis()+10000;repo.log("多指点击","系统不接受多指手势，稍后再试");}
     }
     void finishRound(){
         if(current==null)return;

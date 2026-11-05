@@ -92,4 +92,5 @@ final class Screen {
     int amount(){
         return evidence().amount();
     }
+    WaitingTapPlan.Plan waitingTapPlan(int maxStrokes,java.util.Random random){PanelEvidence e=evidence();PanelEvidence.Box amount=e.amountBox();return e.anchor==null||amount==null?null:WaitingTapPlan.create(width,height,e.anchor.bottom(),amount.top(),amount.bottom(),maxStrokes,random);}
 }
