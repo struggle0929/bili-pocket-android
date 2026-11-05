@@ -43,6 +43,7 @@ public class MainActivity extends Activity {
         button(top,"只读检查红包（3秒后截图识别）",()->{PocketService service=PocketService.instance;if(service==null){toast("请先连接无障碍");return;}moveTaskToBack(true);handler.postDelayed(service::inspectPacket,3000);});
         button(top,"开始运行",()->{PocketService s=PocketService.instance;if(s==null){toast(PermissionStatus.accessibilityEnabled(this)?"权限已开启但服务未连接；请检查系统详情或后台设置":"请开启无障碍权限");PermissionStatus.accessibility(this);return;}s.start();live.setText(state());});
         button(top,"停止运行",()->{if(PocketService.instance!=null)PocketService.instance.stop("用户手动停止",false);live.setText(state());});
+        button(top,"清零连续未中奖",this::clearLosses);
         note(top,"保持屏幕亮起且解锁。悬浮彩字显示状态，点击 × 立即停止。验证码锁定不会定时重启。");
         LinearLayout tasks=card("任务队列 · 越早开奖越靠前");button(tasks,"刷新任务",()->show("任务"));
         List<DualPlan.Draw> planned=new ArrayList<>();
@@ -55,6 +56,10 @@ public class MainActivity extends Activity {
         queue=text(queueText(),15,INK);tasks.addView(queue);
     }
     String queueText(){StringBuilder out=new StringBuilder();for(Repo.Task t:repo.tasks())out.append(t.room).append(" · ").append(t.amount).append("电池\n").append(new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(t.end))).append(" · ").append(t.state).append("\n\n");return out.length()==0?"等待目标 QQ 群的新红包通知。":out.toString();}
+    void clearLosses(){
+        p.clearLosses();repo.log("手动清零","连续未中奖已清零，连续未中休眠已取消；历史记录及验证锁定保留");
+        if(live!=null)live.setText(state());toast("连续未中奖已清零，休眠已取消");
+    }
     void messages(){LinearLayout c=card("QQ 消息自动接收");button(c,"仅监听 QQ 消息（不操作 B站）",()->{p.put("listen",true);toast("已开始监听匹配目标群的QQ通知");});button(c,"停止 QQ 消息监听",()->{p.put("listen",false);toast("已停止QQ通知接收");});note(c,"目标群标题关键词："+p.s("group","B站直播区游戏群"));note(c,"只读取 QQ 通知，不连接电脑。群免打扰、通知内容隐藏、QQ 合并或截断通知都会影响任务获取。通知缺少链接或时间时不会执行。");button(c,"打开通知读取授权",()->PermissionStatus.notifications(this));button(c,"刷新消息与解析结果",()->show("消息"));logView=text(repo.events(),13,INK);c.addView(logView);}
     void records(){LinearLayout c=card("参与记录与获奖证据");prizes=text(repo.prizeSummary(),18,ACCENT);c.addView(prizes);note(c,"实际获奖数量单独保存；红包总额不是个人所得。截图补记会按中奖时间重新计算其后的连续未中，不发送历史感谢消息。");button(c,"从截图补记中奖",()->{if(PocketService.instance!=null&&PocketService.instance.running){toast("请先停止运行，再修正历史记录");return;}Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);i.putExtra("android.provider.extra.INITIAL_URI",Uri.parse("content://com.android.externalstorage.documents/document/primary:Download"));startActivityForResult(i,44);});button(c,"导出 CSV",()->{try{String path=FilesOut.write(this,"exports","红包记录-"+System.currentTimeMillis()+".csv",repo.csv().getBytes(StandardCharsets.UTF_8),"text/csv");toast("已导出："+path);repo.log("导出",path);}catch(Exception e){toast("导出失败："+e.getMessage());}});button(c,"选择导出目录",()->pick("exports"));button(c,"选择截图目录",()->pick("screenshots"));note(c,"导出目录："+p.s("exports","应用专属目录/exports")+"\n截图目录："+p.s("screenshots","应用专属目录/screenshots"));button(c,"截图留证",()->{if(PocketService.instance!=null)PocketService.instance.capture("manual");else toast("请先连接无障碍服务");});logView=text(repo.events(),13,INK);c.addView(logView);}
     void inspectWinImage(Uri uri){
@@ -89,9 +94,11 @@ public class MainActivity extends Activity {
         note(a,"小米手机还需允许自启动、后台无限制；安装来源限制可能要求在应用详情里允许受限设置。无需 Root。");
         field(a,"目标群通知标题关键词（群名称，不是群号）","group","B站直播区游戏群",false);
         LinearLayout b=card("黑名单");field(b,"房间号（逗号或换行分隔）","blacklist","",true);note(b,"黑名单在接收消息和进房前都会检查。");
-        LinearLayout timing=card("任务与自动休眠");field(timing,"提前进房 / 秒","before","60",false);field(timing,"开奖后最少留存 / 秒","after","30",false);field(timing,"连续多少个明确未中奖后休眠","lossLimit","10",false);field(timing,"多久后自动恢复 / 分钟","restMinutes","60",false);
+        LinearLayout timing=card("任务与自动休眠");field(timing,"提前进房基准 / 秒","before","60",false);field(timing,"进房时间随机波动 ±秒（0关闭）","beforeJitter","10",false);field(timing,"开奖后最少留存 / 秒","after","30",false);field(timing,"留存额外随机增加 0～秒（0关闭）","afterExtra","10",false);
+        note(timing,"默认提前50～70秒进房，开奖后留存30～40秒。同一任务只抽取一次；设置修改影响尚未排定时间的新任务。时间波动不保证避免平台识别。");
+        field(timing,"连续多少个明确未中奖后休眠","lossLimit","10",false);field(timing,"多久后自动恢复 / 分钟","restMinutes","60",false);button(timing,"清零连续未中奖",this::clearLosses);
         Switch club=new Switch(this);club.setText("每个房间首次允许1电池入团");club.setTextColor(INK);club.setChecked(p.b("allowOneBattery",false));club.setOnCheckedChangeListener((v,on)->p.put("allowOneBattery",on));timing.addView(club);note(timing,"默认关闭。仅限明确标注需入团（1电池）的红包；每个房间只尝试一次。其他付费弹窗或超过1电池时停止。");
-        note(timing,"已参与后停留在红包面板等开奖。同房多个红包向左滑动；20电池不参加。同一天第二次进该房间时，所有互动消息均不发送。进房失败两次当天跳过。");
+        note(timing,"已参与后停留在红包面板等开奖。同房多个红包按最长留存处理。留存到点后返回B站首页并确认退出，才进入新房间；休眠期间也会先完成退出。20电池不参加。同日再次进房不发消息。进房失败两次当天跳过。");
         LinearLayout msg=card("互动消息 · 可选");Switch enabled=new Switch(this);enabled.setText("启用已配置的互动消息");enabled.setTextColor(INK);enabled.setChecked(p.b("messages",true));enabled.setOnCheckedChangeListener((v,on)->p.put("messages",on));msg.addView(enabled);
         note(msg,"每行执行一个动作，行的顺序即发送顺序。text: 来啦！|好耶~ 表示随机选一句；emoji:EveOneCat2 使用已录制表情路径。未找到发送按钮不会声称发送成功。");
         field(msg,"确认参与后","joinActions","text:来了~",true);field(msg,"明确中奖后","winActions","text:谢谢老板",true);field(msg,"明确未中奖后","loseActions","",true);
@@ -109,7 +116,7 @@ public class MainActivity extends Activity {
         field(dual,"进房验证房间号（两个账号统一使用B站内搜索）","routeRoom","",false);
         for(boolean backup:new boolean[]{false,true})button(dual,backup?"按房间号验证备用账号进房":"验证主账号进房",()->{PocketService service=PocketService.instance;if(service==null){toast("请先开启无障碍");return;}if(service.running){toast("请先停止任务");return;}String target=p.s("routeRoom","");if(!target.matches("[1-9][0-9]{0,14}")){toast("先填写验证房间号");return;}moveTaskToBack(true);handler.postDelayed(()->service.previewRoomRoute(target,backup),2000);});
         LinearLayout safe=card("异常停止");note(safe,"当前验证锁定："+p.s("verificationLock","无"));button(safe,"已人工处理验证，解除本地锁定",()->new AlertDialog.Builder(this).setTitle("解除本地锁定").setMessage("请先在B站中手动完成验证并确认账号状态正常。解除只允许再次启动，不代表平台限制已解除。").setPositiveButton("确认已处理",(d,w)->{p.put("verificationLock","");show("设置");}).setNegativeButton("取消",null).show());
-        LinearLayout about=card("关于与更新");note(about,"0.1.10 · 中奖记录与多红包修复\n所有任务、通知原文和截图只保存在手机；不上传账号凭证。\n中奖面板独立识别奖品数字，可从截图补记并重算连续未中。单账号流程；双开调度暂未启用。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
+        LinearLayout about=card("关于与更新");note(about,"0.1.11 · 计数清零、时间范围与到点退出\n所有任务、通知原文和截图只保存在手机；不上传账号凭证。\n单账号流程；双开调度暂未启用。本版新增退出流程尚待真机验证。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
     }
     void field(LinearLayout box,String title,String key,String def,boolean multiline){
         box.addView(text(title,14,MUTED));EditText e=new EditText(this);e.setTextColor(INK);e.setHintTextColor(MUTED);e.setText(p.s(key,def));e.setSingleLine(!multiline);e.setTextSize(15);box.addView(e,new LinearLayout.LayoutParams(-1,-2));

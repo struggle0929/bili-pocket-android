@@ -22,16 +22,18 @@ public class PocketService extends AccessibilityService {
     Repo.Task current; final Set<Long> roundConfirmed=new HashSet<>(),roundSubmitted=new HashSet<>();
     int screenWidth,screenHeight,packetX=-1,packetY=-1;
     long lossHintTask=-1;String lossHint="";int winAmountChecks;
+    RoomStay stay=new RoomStay(0);boolean leaving,homeReady,mainActivityObserved;long exitStarted,proofUntil;int exitAttempts;Repo.Task retryEntry;
+    final Map<Long,TaskTiming> timings=new HashMap<>();
     WindowManager wm;View overlay;TextView overlayText;PowerManager.WakeLock wake;
     final Runnable tick=new Runnable(){public void run(){try{step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}h.postDelayed(this,running&&current!=null?500:1000);}};
-    @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();wm=(WindowManager)getSystemService(WINDOW_SERVICE);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
+    @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();room=p.s("activeRoom","");stay=new RoomStay(p.l("roomLeaveAt",0));wm=(WindowManager)getSystemService(WINDOW_SERVICE);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){
         if(roomNavigator!=null)roomNavigator.event(e);
         if(running&&current!=null&&"tv.danmaku.bili".contentEquals(e.getPackageName()==null?"":e.getPackageName())&&ResultEvidence.inWindow(System.currentTimeMillis(),current.end,confirmed)){
             for(CharSequence label:e.getText())if(ResultEvidence.loss(String.valueOf(label))){lossHintTask=current.id;lossHint=label.toString();repo.log("未中奖提示",lossHint);nextAction=0;break;}
         }
         if(e.getEventType()==AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED&&"tv.danmaku.bili".contentEquals(e.getPackageName()==null?"":e.getPackageName())){
-            String cls=String.valueOf(e.getClassName());if(cls.contains("LiveRoomActivity"))liveActivity=true;else if(cls.contains("MainActivity"))liveActivity=false;
+            String cls=String.valueOf(e.getClassName());if(cls.contains("LiveRoomActivity")){liveActivity=true;if(current==null&&!leaving)homeReady=false;}else if(cls.contains("MainActivity")){liveActivity=false;if(leaving)mainActivityObserved=true;}
         }
     }
     @Override public void onInterrupt(){stop("无障碍中断",false);}
@@ -42,7 +44,7 @@ public class PocketService extends AccessibilityService {
         if(roomNavigator!=null)roomNavigator.cancel();
         if(blocked()){status="验证锁定：请在设置确认处理后解除";return;}
         if(!notificationEnabled()){status="请先授权 QQ 通知读取";return;}
-        p.put("listen",true);running=true;generation++;busy=false;nextAction=0;current=null;room="";status="监听 QQ · 等待任务";
+        p.put("listen",true);running=true;generation++;busy=false;nextAction=0;current=null;retryEntry=null;leaving=false;homeReady=false;pendingFinish=false;status="监听 QQ · 等待任务";
         if(p.s("joinActions","emoji:EveOneCat2").equals("emoji:EveOneCat2"))p.put("joinActions","text:来了~");
         showOverlay();
         PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);wake=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"pocket:runner");wake.acquire(4*60*60*1000L);
@@ -51,8 +53,8 @@ public class PocketService extends AccessibilityService {
     boolean notificationEnabled(){String v=android.provider.Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");return v!=null&&v.contains(getPackageName());}
     public void stop(String reason,boolean lock){
         if(roomNavigator!=null)roomNavigator.cancel();
-        running=false;busy=false;pendingFinish=false;generation++;status=reason;if(p!=null){p.put("listen",false);p.put("sleepUntil","0");if(lock)p.put("verificationLock",reason);}
-        if(repo!=null){repo.log("停止",reason);if(current!=null){repo.state(current.id,"无法确认",reason);current=null;}}if(overlay!=null){wm.removeView(overlay);overlay=null;}if(wake!=null&&wake.isHeld())wake.release();
+        running=false;busy=false;pendingFinish=false;leaving=false;homeReady=false;generation++;status=reason;if(p!=null){p.put("listen",false);p.put("sleepUntil","0");if(lock)p.put("verificationLock",reason);}
+        if(repo!=null){repo.log("停止",reason);if(current!=null){repo.state(current.id,"无法确认",reason);current=null;}if(retryEntry!=null){repo.state(retryEntry.id,"无法确认",reason);retryEntry=null;}}if(overlay!=null){wm.removeView(overlay);overlay=null;}if(wake!=null&&wake.isHeld())wake.release();
     }
     void showOverlay(){
         if(overlay!=null)return;
@@ -68,18 +70,25 @@ public class PocketService extends AccessibilityService {
     void step(){
         if(!running)return;long now=System.currentTimeMillis();
         if(overlayText!=null){overlayText.setText(status+"\n"+(room.isEmpty()?"等待红包":room)+" · 连续未中 "+p.n("losses",0));overlayText.setTextColor(new int[]{0xffe7b5ff,0xff8fe5ff,0xffffb4c9}[(int)((now/2000)%3)]);}
-        if(p.until()>now){status="休眠至 "+new java.text.SimpleDateFormat("HH:mm:ss").format(new Date(p.until()));return;}
-        if(p.until()!=0){p.put("sleepUntil","0");p.put("losses","0");status="休眠结束 · 继续监听";}
         if(busy||now<nextAction)return;
         if(pendingFinish&&current!=null){pendingFinish=false;finishRound();return;}
         if(!((PowerManager)getSystemService(POWER_SERVICE)).isInteractive()){status="屏幕已关闭 · 等待解锁";return;}
         android.app.KeyguardManager kg=(android.app.KeyguardManager)getSystemService(KEYGUARD_SERVICE);if(kg.isKeyguardLocked()){status="手机锁定 · 等待解锁";return;}
+        if(leaving){checkHomeExit(now);return;}
+        if(current==null&&!room.isEmpty()){
+            if(now<proofUntil){status="保存结果截图 · 稍后退出";return;}
+            if(!stay.due(now)){status="留存至 "+new java.text.SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(new Date(stay.until()));return;}
+            beginHomeExit("留存结束");return;
+        }
+        // Leaving a completed room must run even while the loss-limit rest timer is active.
+        if(p.until()>now){status="休眠至 "+new java.text.SimpleDateFormat("HH:mm:ss").format(new Date(p.until()));return;}
+        if(p.until()!=0){p.clearLosses();status="休眠结束 · 继续监听";}
         List<Repo.Task> tasks=repo.tasks();
         if(current==null){
             for(Repo.Task t:tasks)if(t.state.equals("等待")){
                 if(PacketParser.blacklisted(p.s("blacklist",""),t.room)){repo.state(t.id,"黑名单","");continue;}
                 if(t.end<=now){repo.state(t.id,"已过期","");continue;}
-                if(t.end-now<=p.n("before",60)*1000L){enter(t);return;}
+                if(now>=timing(t).enterAt(t.end)){if(!homeReady){beginHomeExit("进房前清理页面");return;}enter(t);return;}
             }
             status=room.isEmpty()?"监听 QQ · 等待进房时间":"留在直播间 · 等待下一任务";return;
         }
@@ -92,7 +101,7 @@ public class PocketService extends AccessibilityService {
         if(entryConfirmed&&!pkg.equals("tv.danmaku.bili")){status="任务已参与进房流程 · 等待切回B站";return;}
         if(!pkg.equals("tv.danmaku.bili")||!entryConfirmed){
             if(now-entered<15000){status="等待 B站前台";return;}
-            if(enterAttempts<2){enterAttempts++;openRoom(current.room);entered=now;return;}
+            if(enterAttempts<2){retryRoomEntry();return;}
             repo.state(current.id,"进房失败","两次失败，今天跳过此房间");p.put("failed."+java.time.LocalDate.now()+"."+current.room,true);current=null;status="两次进房失败 · 跳过";return;
         }
         if(!visitRecorded){firstVisit=repo.visit(room);visitRecorded=true;}
@@ -118,7 +127,10 @@ public class PocketService extends AccessibilityService {
     }
     void enter(Repo.Task t){
         if(p.b("failed."+java.time.LocalDate.now()+"."+t.room,false)){repo.state(t.id,"已跳过","同日两次进房失败");return;}
-        if(!room.equals(t.room)){visitRecorded=false;firstVisit=false;packetX=-1;packetY=-1;openRoom(t.room);room=t.room;}
+        timing(t);
+        if(!room.equals(t.room)&&(!room.isEmpty()||!homeReady)){stop("未确认旧直播间退出，暂停进房以避免页面叠加",false);return;}
+        boolean newRoom=!room.equals(t.room);current=t;
+        if(newRoom){visitRecorded=false;firstVisit=false;packetX=-1;packetY=-1;room=t.room;p.put("activeRoom",room);homeReady=false;openRoom(t.room);if(!running)return;}
         current=t;entered=System.currentTimeMillis();enterAttempts=1;scans=0;winAmountChecks=0;lastResultRefresh=0;lossHintTask=-1;lossHint="";confirmed=roundConfirmed.contains(t.id);submitted=roundSubmitted.contains(t.id);visitSent=false;
         repo.state(t.id,"进房中","");status="进入 "+room;nextAction=entered+1200;
     }
@@ -140,7 +152,7 @@ public class PocketService extends AccessibilityService {
             String reason="检测到验证/限制："+l.text;capture("verification");stop(reason,true);return;
         }
         if(s.has("无法进入直播间")||s.has("你已被拉黑")||s.has("直播间不存在")){
-            if(enterAttempts<2){enterAttempts++;openRoom(room);entered=now;nextAction=now+6000;return;}
+            if(enterAttempts<2){retryRoomEntry();return;}
             p.put("failed."+java.time.LocalDate.now()+"."+room,true);repo.state(current.id,"进房失败",s.panelText());current=null;return;
         }
         if(s.has("点个关注吧")||s.has("关注主播不迷路")){if(!clickNode("关闭")){if(p.s("followClose","").isEmpty()){stop("关注弹窗需要标定关闭按钮",false);return;}tapRelative(p.s("followClose",""));}nextAction=now+1500;return;}
@@ -213,12 +225,47 @@ public class PocketService extends AccessibilityService {
         }repo.alignEnd(current,end);
     }
     void finishRound(){
+        if(current==null)return;
         if(busy){pendingFinish=true;return;}
-        long now=System.currentTimeMillis(),doneEnd=current.end;String doneRoom=current.room;current=null;
-        if(p.until()>now){status="连续未中奖休眠";return;}
-        for(Repo.Task t:repo.tasks())if(t.room.equals(doneRoom)&&t.state.equals("等待")&&t.end>now){current=t;confirmed=roundConfirmed.contains(t.id);submitted=roundSubmitted.contains(t.id);scans=0;visitSent=true;if(!busy)swipe();nextAction=now+2000;status="切换同房下一个红包";return;}
-        // Keep the room until a subsequent task's entry time. No HOME/force-stop.
-        nextAction=Math.max(now,doneEnd+Math.max(0,p.n("after",30))*1000L);status="本轮结束 · 留存中";
+        long now=System.currentTimeMillis();String doneRoom=current.room;stay.include(current.end,timing(current));p.put("roomLeaveAt",""+stay.until());current=null;
+        if(p.until()<=now)for(Repo.Task t:repo.tasks())if(t.room.equals(doneRoom)&&t.state.equals("等待")&&t.end>now&&!PacketParser.blacklisted(p.s("blacklist",""),t.room)){
+            enter(t);if(!running)return;visitSent=true;swipe();nextAction=now+500;status="切换同房下一个红包";return;
+        }
+        nextAction=0;status="本轮结束 · 留存后退出直播间";
+    }
+    TaskTiming timing(Repo.Task task){
+        TaskTiming value=timings.get(task.id);if(value==null){value=p.taskTiming(task.id);timings.put(task.id,value);repo.log("任务时间",task.room+" · 任务 "+task.id+" · 提前 "+value.beforeSeconds()+" 秒，开奖后留存 "+value.holdSeconds()+" 秒");}return value;
+    }
+    void retryRoomEntry(){
+        retryEntry=current;current=null;stay.clear();p.put("roomLeaveAt","0");beginHomeExit("第二次进房前清理页面");
+    }
+    void beginHomeExit(String reason){
+        int windows=0;for(AccessibilityWindowInfo win:getWindows()){AccessibilityNodeInfo n=win.getRoot();if(n!=null&&"tv.danmaku.bili".contentEquals(n.getPackageName()==null?"":n.getPackageName()))windows++;}
+        if(windows>1){stop("检测到多个B站窗口，暂停单账号退出以免影响另一个账号",false);return;}
+        for(AccessibilityNodeInfo n:nodes())if(n.isVisibleToUser()&&String.valueOf(n.getText()).matches(".*(人机验证|安全验证|请完成验证|拖动滑块|账号异常|操作频繁).*")){capture("verification");stop("退出前检测到验证/限制，请人工处理",true);return;}
+        leaving=true;homeReady=false;exitAttempts=0;repo.log("准备退出直播间",(room.isEmpty()?"启动清理":room)+" · "+reason);launchHome();
+    }
+    void launchHome(){
+        Intent home=getPackageManager().getLaunchIntentForPackage("tv.danmaku.bili");
+        if(home==null){stop("没有找到B站首页入口，未继续叠加直播间",false);return;}
+        // Reset the Bili task to its exported launcher. Never use HOME, force-stop or blind BACK.
+        home.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TASK);mainActivityObserved=false;exitStarted=System.currentTimeMillis();exitAttempts++;status="正在退出直播间 · 确认B站首页";
+        try{startActivity(home);nextAction=exitStarted+800;}catch(RuntimeException e){stop("返回B站首页失败："+e.getClass().getSimpleName(),false);}
+    }
+    void checkHomeExit(long now){
+        if(choosePrimaryApp()){nextAction=now+650;return;}
+        AccessibilityNodeInfo root=biliRoot();List<AccessibilityNodeInfo> all=new ArrayList<>();walk(root,all);List<String> labels=new ArrayList<>();boolean liveControls=false;
+        for(AccessibilityNodeInfo n:all)if(n.isVisibleToUser()){
+            String id=n.getViewIdResourceName();if(id!=null&&(id.endsWith("/live_send_danmaku")||id.endsWith("/bt_emotion_show")))liveControls=true;
+            String value=String.valueOf(n.getText()).trim();labels.add(value);
+            if(value.matches(".*(人机验证|安全验证|请完成验证|拖动滑块|账号异常|操作频繁).*")){capture("verification");stop("退出时检测到验证/限制，请人工处理",true);return;}
+        }
+        if(HomeEvidence.confirmed(root!=null,liveControls,mainActivityObserved,labels)){
+            repo.log("已退出直播间",room.isEmpty()?"已确认B站首页，允许进房":room+" · 已确认B站首页，旧页面栈已清理");
+            room="";p.put("activeRoom","");stay.clear();p.put("roomLeaveAt","0");leaving=false;homeReady=true;entryConfirmed=false;liveActivity=false;visitRecorded=false;packetX=-1;packetY=-1;nextAction=0;status="已退出直播间 · 等待下一任务";
+            if(retryEntry!=null){Repo.Task task=retryEntry;retryEntry=null;enter(task);enterAttempts=2;}return;
+        }
+        if(now-exitStarted>=8000){if(exitAttempts<2){repo.log("退出复查","未确认B站首页，仅重试返回首页，不进新房间");launchHome();}else stop("两次返回首页后仍未确认退出，已暂停，避免直播间页面叠加",false);}
     }
     void openPacket(){if(packetX>=0&&packetY>=0)tap(packetX,packetY);else tapRelative(p.s("packetPoint","0.08,0.17"));}
     void closePacket(){tapRelative(p.s("packetClose","0.782,0.479"));}
@@ -437,6 +484,7 @@ public class PocketService extends AccessibilityService {
     }
     public void capture(String type){
         if(System.currentTimeMillis()-lastEvidence<1500)return;lastEvidence=System.currentTimeMillis();
+        if(current!=null)proofUntil=lastEvidence+2800;
         final String target=room;final long task=current==null?0:current.id;
         // OCR just used takeScreenshot; Android rejects another capture immediately.
         h.postDelayed(()->captureNow(type,target,task,0),800);

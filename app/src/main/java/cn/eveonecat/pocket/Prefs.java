@@ -8,5 +8,12 @@ public final class Prefs {
     boolean b(String k,boolean d){return p.getBoolean(k,d);}
     void put(String k,String v){p.edit().putString(k,v).apply();}
     void put(String k,boolean v){p.edit().putBoolean(k,v).apply();}
-    long until(){try{return Long.parseLong(s("sleepUntil","0"));}catch(Exception e){return 0;}}
+    long l(String key,long def){try{return Long.parseLong(s(key,""+def));}catch(Exception e){return def;}}
+    long until(){return l("sleepUntil",0);}
+    TaskTiming taskTiming(long id){
+        String key="taskTiming."+id;TaskTiming timing=TaskTiming.decode(s(key,""));
+        if(timing==null){timing=TaskTiming.sample(n("before",60),n("beforeJitter",10),n("after",30),n("afterExtra",10),new java.util.Random());put(key,timing.encoded());}
+        return timing;
+    }
+    void clearLosses(){p.edit().putString("losses","0").putString("sleepUntil","0").apply();}
 }
