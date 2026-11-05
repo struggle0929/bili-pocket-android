@@ -27,7 +27,7 @@ public class PocketService extends AccessibilityService {
     long nextWaitingTap;boolean waitingGesture;final Random waitingRandom=new Random();
     WindowManager wm;View overlay;TextView overlayText;PowerManager.WakeLock wake;
     final Runnable tick=new Runnable(){public void run(){try{if(web!=null)web.sync();step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}h.postDelayed(this,running&&current!=null?500:1000);}};
-    @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();room=p.s("activeRoom","");stay=new RoomStay(p.l("roomLeaveAt",0));wm=(WindowManager)getSystemService(WINDOW_SERVICE);web=new WebPoolMonitor(this,h);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
+    @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();repo.refilter(p);room=p.s("activeRoom","");stay=new RoomStay(p.l("roomLeaveAt",0));wm=(WindowManager)getSystemService(WINDOW_SERVICE);web=new WebPoolMonitor(this,h);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){
         if(roomNavigator!=null)roomNavigator.event(e);
         if(running&&current!=null&&"tv.danmaku.bili".contentEquals(e.getPackageName()==null?"":e.getPackageName())&&ResultEvidence.inWindow(System.currentTimeMillis(),current.end,confirmed)){
@@ -128,6 +128,7 @@ public class PocketService extends AccessibilityService {
         });
     }
     void enter(Repo.Task t){
+        if(!p.target().reason(t.amount,t.shares).isEmpty()){status="目标红包筛选 · 等待其他任务";return;}
         if(p.b("failed."+java.time.LocalDate.now()+"."+t.room,false)){repo.state(t.id,"已跳过","同日两次进房失败");return;}
         timing(t);
         if(!room.equals(t.room)&&(!room.isEmpty()||!homeReady)){stop("未确认旧直播间退出，暂停进房以避免页面叠加",false);return;}
@@ -199,10 +200,11 @@ public class PocketService extends AccessibilityService {
         }
         if(s.panelHas("发的红包")||s.panelHas("共")&&s.panelHas("开奖")){
             int amount=s.amount();
-            if(amount<=20&&amount>=0){repo.log("跳过20电池","房间 "+room);swipe();nextAction=now+1800;if(++scans>8){repo.state(current.id,"已跳过","未找到超过20电池的匹配红包");finishRound();}return;}
+            int visibleShares=s.panelShares();String targetReason=p.target().reason(amount,visibleShares>0?visibleShares:current.shares);
+            if(amount>=0&&!targetReason.isEmpty()){repo.log("目标红包筛选",targetReason+" · 房间 "+room);swipe();nextAction=now+450;if(++scans>8){repo.state(current.id,"已跳过","未找到符合目标红包规则的匹配卡片");finishRound();}return;}
             // Only this card's own countdown can identify its draw; the header can show another card.
             int secs=s.panelSeconds();
-            if(!ClaimDecision.matchingCard(current.amount,amount,secs,current.end,now)){status="核对当前红包卡片";if(++scans<=8){swipe();nextAction=now+450;}else {repo.state(current.id,"无法确认","面板金额或时间无法与任务匹配，未提交");finishRound();}return;}
+            if(!ClaimDecision.matchingCard(current.amount,amount,secs,current.end,now)||visibleShares>0&&current.shares>0&&visibleShares!=current.shares){status="核对当前红包卡片";if(++scans<=8){swipe();nextAction=now+450;}else {repo.state(current.id,"无法确认","面板金额、份数或时间无法与任务匹配，未提交");finishRound();}return;}
             Screen.Label grab=s.panelExact("抢","抢红包","立即参与");
             if(grab!=null&&!submitted){
                 String panel=s.panelText().replaceAll("\\s","");

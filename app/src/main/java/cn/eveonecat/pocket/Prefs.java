@@ -17,6 +17,7 @@ public final class Prefs {
     }
     void clearLosses(){p.edit().putString("losses","0").putString("sleepUntil","0").apply();}
     boolean webMode(){return s("sourceMode","qq").equals("web");}
+    TargetRule target(){String mode=s("targetMode","default");try{return TargetRule.of(mode,s(mode.equals("share")?"targetShare":"targetTotal",mode.equals("share")?"10":"100"));}catch(IllegalArgumentException e){return TargetRule.invalid();}}
     String sourceKey(){if(!webMode())return "qq";String key="web:"+PoolEndpoint.source(s("webUrl",PoolEndpoint.DEFAULT)),reader=s("webReader","auto");if(!reader.equals("auto"))key+="|"+reader;if(reader.equals("json"))key+=":"+NoticeParser.digest(s("webJsonMapping",GenericJsonParser.EXAMPLE)).substring(0,16);String config=s("webSocketUrl","")+"\n"+s("webStreamUser","")+"\n"+s("webStreamKey","");if(!config.equals("\n\n"))key+="|config:"+NoticeParser.digest(config).substring(0,16);return key;}
     String sourceName(){if(!webMode())return "QQ · "+s("group","B站直播区游戏群");try{return "网页 · "+java.net.URI.create(PoolEndpoint.source(s("webUrl",PoolEndpoint.DEFAULT))).getAuthority();}catch(RuntimeException e){return "网页 · 地址待检查";}}
     java.util.List<String> webHistory(){if(!p.contains("webHistory")){java.util.List<String> seed=java.util.List.of(s("webUrl",PoolEndpoint.DEFAULT));put("webHistory",WebHistory.encode(seed));}return WebHistory.parse(s("webHistory","[]"));}

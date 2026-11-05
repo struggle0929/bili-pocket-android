@@ -6,6 +6,9 @@ import java.util.*;
 /** Adapter for the pool page's observed /pool/api/state schema. */
 final class PoolParser {
     static List<PacketNotice> parse(String json,long now)throws JSONException {
+        return TargetRule.defaults().apply(parseData(json,now));
+    }
+    static List<PacketNotice> parseData(String json,long now)throws JSONException {
         if(json.length()>2*1024*1024)throw new IllegalArgumentException("网页数据过大");
         JSONObject root=new JSONObject(json),pool=root.optJSONObject("redpocket");
         long server=number(root,"now",-1);
@@ -29,7 +32,6 @@ final class PoolParser {
                 else if(guard!=0)reason="需要上舰，不参与";
                 else if(require!=1&&require!=2)reason="仅参与关注或粉丝团条件";
                 else if(total<0||total>99999900||amount<0)reason="金额格式不明确，不参与";
-                else if(amount<=20)reason="20电池及以下，不参与";
                 else if(end<=now)reason="已开奖";
                 else if(end-now>86400000)reason="开奖时间异常";
                 long lid=number(r,"lid",0);String key=kind+":"+(lid>0?""+lid:room+":"+end+":"+award);

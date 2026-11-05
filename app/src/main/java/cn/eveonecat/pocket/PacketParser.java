@@ -8,6 +8,9 @@ public final class PacketParser {
     public record Packet(String room,long end,int amount,String condition) {}
     static final Pattern ROOM=Pattern.compile("https?://live\\.bilibili\\.com/([1-9]\\d{0,14})(?!\\d)");
     public static List<Packet> parse(String text,long sent) {
+        List<Packet> out=new ArrayList<>();for(Packet p:parseData(text,sent))if(p.amount()>20)out.add(p);return out;
+    }
+    static List<Packet> parseData(String text,long sent) {
         if(text==null||text.length()>32000||sent<0)return List.of();
         List<Packet> out=new ArrayList<>(); Set<String> shared=new HashSet<>(); Matcher rm=ROOM.matcher(text);
         while(rm.find())shared.add(rm.group(1));
@@ -27,7 +30,7 @@ public final class PacketParser {
             Matcher cond=Pattern.compile("条件\\s*[:：]\\s*([^\\r\\n]+)").matcher(b);
             String c=cond.find()?cond.group(1).trim():""; if(!c.equals("关注")&&!c.equals("粉丝团"))continue;
             Matcher amt=Pattern.compile("(?<![0-9])([0-9]{1,6})\\s*电池").matcher(b); if(!amt.find())continue; int amount=Integer.parseInt(amt.group(1));
-            if(amount<=20)continue;
+            if(amount<=0)continue;
             long end=endTime(b,sent);
             if(end>sent&&end-sent<=86400000)out.add(new Packet(rooms.iterator().next(),end,amount,c));
         }return out;

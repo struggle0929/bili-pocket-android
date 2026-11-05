@@ -17,7 +17,7 @@ public class MainActivity extends Activity {
     Prefs p; Repo repo; LinearLayout content,base,taskRows,messageRows,recordRows; TextView live,logView,messageState,setupLink,statNote;Button receiveButton,pauseButton,startButton,stopButton;String page="任务",folder="",taskSignature="",messageSignature="";boolean taskHistory;TextView[] recordMetrics;int recordLimit=40;String recordSignature="";AutoCompleteTextView urlInput;UrlHistoryAdapter historyAdapter;
     final Handler handler=new Handler(Looper.getMainLooper());
     final Runnable refresh=new Runnable(){public void run(){if(live!=null)live.setText(state());if(setupLink!=null)setupLink.setVisibility(needsSetup()?View.VISIBLE:View.GONE);if(startButton!=null){boolean running=PocketService.instance!=null&&PocketService.instance.running;startButton.setEnabled(!running);stopButton.setEnabled(running);}if(taskRows!=null)renderTasks();if(messageRows!=null)renderMessages();if(messageState!=null)messageState.setText(feedState());if(receiveButton!=null)receiveButton.setText(p.b("listen",false)?"立即刷新":"开始接收");if(pauseButton!=null)pauseButton.setEnabled(p.b("listen",false));if(logView!=null)logView.setText(repo.events());if(recordRows!=null)renderRecords();handler.postDelayed(this,1500);}};
-    @Override public void onCreate(Bundle b){super.onCreate(b);p=new Prefs(this);repo=new Repo(this);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);getWindow().getDecorView().setSystemUiVisibility(0);show("任务");handler.post(refresh);}
+    @Override public void onCreate(Bundle b){super.onCreate(b);p=new Prefs(this);repo=new Repo(this);repo.refilter(p);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);getWindow().getDecorView().setSystemUiVisibility(0);show("任务");handler.post(refresh);}
     @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);repo.close();super.onDestroy();}
     int dp(int x){return (int)(x*getResources().getDisplayMetrics().density);}
     GradientDrawable bg(int color,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
@@ -44,7 +44,7 @@ public class MainActivity extends Activity {
     String sourceKey(){try{return p.sourceKey();}catch(IllegalArgumentException e){return "web:invalid";}}
     boolean needsSetup(){return PocketService.instance==null||!p.webMode()&&!PermissionStatus.notificationEnabled(this)||!p.s("verificationLock","").isEmpty();}
     void home(){
-        LinearLayout top=card("当前任务");note(top,p.webMode()?"消息来源 · 网页监控":"消息来源 · QQ 群通知");live=text(state(),16,INK);top.addView(live);
+        LinearLayout top=card("当前任务");note(top,(p.webMode()?"消息来源 · 网页监控":"消息来源 · QQ 群通知")+"\n目标 · "+p.target().description());live=text(state(),16,INK);top.addView(live);
         Button[] actions=controls(top,"开始运行",this::startRunner,"停止运行",()->{if(PocketService.instance!=null)PocketService.instance.stop("用户手动停止",false);if(live!=null)live.setText(state());});startButton=actions[0];stopButton=actions[1];stopButton.setEnabled(PocketService.instance!=null&&PocketService.instance.running);
         link(top,"清零连续未中奖",this::clearLosses);
         setupLink=link(top,"前往设置检查权限 / 停止原因",()->show("设置"));setupLink.setVisibility(needsSetup()?View.VISIBLE:View.GONE);
@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
         for(Repo.Task t:ordered){boolean active=t.state.matches("进房中|已参与|已点击待确认")||t.state.equals("等待")&&t.end>now;if(active||taskHistory){tasks.add(t);signature.append(t.id).append(t.end).append(t.state).append(active);if(tasks.size()==30)break;}}
         if(taskSignature.equals(signature.toString())&&taskRows.getChildCount()>0)return;taskSignature=signature.toString();taskRows.removeAllViews();
         if(tasks.isEmpty()){note(taskRows,"暂无待执行任务，去消息页选择来源并接收红包。");return;}
-        for(Repo.Task t:tasks){LinearLayout row=new LinearLayout(this);row.setOrientation(1);row.setPadding(dp(12),dp(8),dp(12),dp(8));row.setBackground(bg(BG,12));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(8);taskRows.addView(row,lp);row.addView(text("房间 "+t.room+" · "+t.amount+" 电池  ›",15,ACCENT));row.setContentDescription("房间 "+t.room+"，点击复制或提前打开");row.setOnClickListener(v->roomMenu(t.room));note(row,new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(t.end))+" 开奖 · "+(t.state.equals("等待")&&t.end<=now?"已过期":t.state));}
+        for(Repo.Task t:tasks){LinearLayout row=new LinearLayout(this);row.setOrientation(1);row.setPadding(dp(12),dp(8),dp(12),dp(8));row.setBackground(bg(BG,12));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(8);taskRows.addView(row,lp);TextView roomTitle=text("房间 "+t.room+" · "+t.amount+" 电池  ›",15,ACCENT);roomTitle.setContentDescription("房间 "+t.room+"，点击复制或打开");roomTitle.setOnClickListener(v->roomMenu(t.room));row.addView(roomTitle);note(row,new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(t.end))+" 开奖 · "+(t.state.equals("等待")&&t.end<=now?"已过期":t.state));}
     }
     Button compactButton(String title,Runnable action,int color){Button button=new Button(this);button.setText(title);button.setAllCaps(false);button.setTextSize(14);button.setTextColor(INK);button.setBackground(bg(color,12));button.setOnClickListener(v->action.run());return button;}
     Button[] controls(LinearLayout parent,String first,Runnable a,String second,Runnable b){LinearLayout row=new LinearLayout(this);LinearLayout.LayoutParams rowLp=new LinearLayout.LayoutParams(-1,-2);rowLp.topMargin=dp(8);parent.addView(row,rowLp);Button left=compactButton(first,a,0xff624388),right=compactButton(second,b,0xff37313f);LinearLayout.LayoutParams x=new LinearLayout.LayoutParams(0,dp(44),1);x.rightMargin=dp(8);row.addView(left,x);row.addView(right,new LinearLayout.LayoutParams(0,dp(44),1));return new Button[]{left,right};}
@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
             webAddress(source);
         }else note(source,"目标群 · "+p.s("group","B站直播区游戏群"));
         messageState=text(feedState(),13,ACCENT);source.addView(messageState);Button[] buttons=controls(source,p.b("listen",false)?"立即刷新":"开始接收",this::receive,"暂停接收",()->{p.put("listen",false);if(PocketService.instance!=null&&PocketService.instance.web!=null)PocketService.instance.web.sync();messageState.setText(feedState());});receiveButton=buttons[0];pauseButton=buttons[1];pauseButton.setEnabled(p.b("listen",false));
-        note(source,"自动进房请在任务页点击“开始运行”。");
+        note(source,"目标 · "+p.target().description()+"\n自动进房请在任务页点击“开始运行”。");
         messageRows=new LinearLayout(this);messageRows.setOrientation(1);content.addView(messageRows);renderMessages();
     }
     String feedState(){if(!p.b("listen",false))return "接收已暂停";if(p.webMode())return PocketService.instance==null?"网页后台服务未连接，请到设置检查无障碍":p.s("webStatus","等待网页更新");return QQListener.connected?"正在接收 QQ 群消息":"QQ通知服务未连接，请到设置检查";}
@@ -94,8 +94,9 @@ public class MainActivity extends Activity {
             String status=row.state().matches("中奖|未中奖|未参与")?row.state():!row.reason().isEmpty()?row.reason():row.end()<=now&&row.state().equals("等待")?"已开奖":row.state().isEmpty()?"可参与":row.state();
             String heading=row.kind().equals("gift_anchor")||row.kind().contains("天选")?"天选福袋 · 不参与":row.amount()>0?row.amount()+" 电池"+(row.shares()>0?" · "+row.shares()+" 份":""):"红包消息";
             LinearLayout card=messageCard(heading);
-            fieldLine(card,"消息来源",row.sourceName());fieldLine(card,"条件",row.condition());LinearLayout roomLine=fieldLine(card,"直播间信息",(row.room().isEmpty()?"房间号待确认":"房间 "+row.room()+"  ›")+(row.anchor().isEmpty()?"":" · "+row.anchor()));if(row.room().matches("[1-9][0-9]{0,14}")){roomLine.setOnClickListener(v->roomMenu(row.room()));roomLine.setContentDescription("房间 "+row.room()+"，点击复制或提前打开");((TextView)roomLine.getChildAt(1)).setTextColor(ACCENT);}
+            fieldLine(card,"消息来源",row.sourceName());fieldLine(card,"条件",row.condition());LinearLayout roomLine=fieldLine(card,"直播间信息",(row.room().isEmpty()?"房间号待确认":"房间 "+row.room()+"  ›")+(row.anchor().isEmpty()?"":" · "+row.anchor()));if(row.room().matches("[1-9][0-9]{0,14}")){TextView roomText=(TextView)roomLine.getChildAt(1);roomText.setOnClickListener(v->roomMenu(row.room()));roomText.setContentDescription("房间 "+row.room()+"，点击复制或打开");roomText.setTextColor(ACCENT);}
             fieldLine(card,"红包信息",row.reward()+(row.shares()>0?" / "+row.shares()+"份":"")+"\n"+(row.end()>0?new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(row.end()))+" 开奖":"开奖时间待确认"));
+            if(row.reward().startsWith("电池红包"))fieldLine(card,"红包期望",TargetRule.average(row.amount(),row.shares()));
             card.addView(text(status,13,row.reason().isEmpty()?0xff98d5bc:MUTED));link(card,"查看原文",()->showText("红包原文",row.raw()));
         }
     }
@@ -104,15 +105,15 @@ public class MainActivity extends Activity {
     void roomMenu(String room){
         if(!room.matches("[1-9][0-9]{0,14}")){toast("没有有效房间号");return;}
         boolean running=PocketService.instance!=null&&PocketService.instance.running;
-        new AlertDialog.Builder(this).setTitle("房间 "+room).setItems(new String[]{"复制房间号",running?"提前打开直播间（先停止自动任务）":"提前打开直播间"},(dialog,index)->{
-            if(index==0){((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("B站房间号",room));toast("已复制房间号");return;}
-            Intent intent=new Intent(Intent.ACTION_VIEW,Uri.parse("bilibili://live/"+room)).setPackage("tv.danmaku.bili");android.content.pm.ResolveInfo target=getPackageManager().resolveActivity(intent,0);
-            if(target==null||target.activityInfo==null){toast("未找到B站直播间入口，请检查是否已安装主应用");return;}
-            intent.setComponent(new ComponentName(target.activityInfo.packageName,target.activityInfo.name));
-            if(PocketService.instance!=null&&PocketService.instance.running)PocketService.instance.stop("手动打开房间 "+room,false);
-            try{startActivity(intent);repo.log("手动打开直播间",room+"；不标记已参与，不自动点击红包");}catch(RuntimeException e){toast("无法打开直播间："+e.getClass().getSimpleName());}
-        }).setNegativeButton("取消",null).show();
+        Dialog dialog=new Dialog(this);dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);LinearLayout box=new LinearLayout(this);box.setOrientation(1);box.setPadding(dp(20),dp(12),dp(20),dp(12));box.setBackground(bg(CARD,20));box.addView(text("房间 "+room,20,ACCENT));note(box,"选择手动操作");
+        menuDivider(box);menuOption(box,"复制房间号",()->{dialog.dismiss();((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("B站房间号",room));toast("已复制房间号");});
+        menuDivider(box);menuOption(box,"打开直播间"+(running?"\n将先停止自动任务":""),()->{dialog.dismiss();manualOpenRoom(room);});
+        menuDivider(box);menuOption(box,"取消",dialog::dismiss);
+        dialog.setContentView(box);Window window=dialog.getWindow();if(window!=null)window.setBackgroundDrawableResource(android.R.color.transparent);dialog.show();if(window!=null)window.setLayout(Math.min(dp(360),getResources().getDisplayMetrics().widthPixels-dp(40)),WindowManager.LayoutParams.WRAP_CONTENT);
     }
+    void menuDivider(LinearLayout parent){View line=new View(this);line.setBackgroundColor(0xff493f55);parent.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}
+    void menuOption(LinearLayout parent,String title,Runnable action){TextView option=text(title,16,INK);option.setPadding(dp(10),dp(14),dp(10),dp(14));option.setMinHeight(dp(54));option.setGravity(Gravity.CENTER_VERTICAL);option.setFocusable(true);option.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x337e58a7),bg(CARD,10),null));option.setOnClickListener(v->action.run());parent.addView(option,new LinearLayout.LayoutParams(-1,-2));}
+    void manualOpenRoom(String room){Intent intent=new Intent(Intent.ACTION_VIEW,Uri.parse("bilibili://live/"+room)).setPackage("tv.danmaku.bili");android.content.pm.ResolveInfo target=getPackageManager().resolveActivity(intent,0);if(target==null||target.activityInfo==null){toast("未找到B站直播间入口，请检查是否已安装主应用");return;}intent.setComponent(new ComponentName(target.activityInfo.packageName,target.activityInfo.name));if(PocketService.instance!=null&&PocketService.instance.running)PocketService.instance.stop("手动打开房间 "+room,false);try{startActivity(intent);repo.log("手动打开直播间",room+"；不标记已参与，不自动点击红包");}catch(RuntimeException e){toast("无法打开直播间："+e.getClass().getSimpleName());}}
     void showText(String title,String value){ScrollView scroll=new ScrollView(this);TextView text=text(value,13,Color.DKGRAY);text.setPadding(dp(18),dp(12),dp(18),dp(12));text.setTextIsSelectable(true);scroll.addView(text);new AlertDialog.Builder(this).setTitle(title).setView(scroll).setPositiveButton("关闭",null).show();}
     void webAddress(LinearLayout parent){
         urlInput=new AutoCompleteTextView(this);urlInput.setTextColor(INK);urlInput.setHintTextColor(MUTED);urlInput.setTextSize(14);urlInput.setSingleLine();urlInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);urlInput.setImeActionLabel("使用",android.view.inputmethod.EditorInfo.IME_ACTION_GO);urlInput.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_GO);urlInput.setText(p.s("webUrl",PoolEndpoint.DEFAULT));urlInput.setThreshold(0);urlInput.setDropDownBackgroundDrawable(bg(CARD,12));parent.addView(urlInput);
@@ -171,12 +172,13 @@ public class MainActivity extends Activity {
         link(network,"JSON 字段映射（高级）",this::jsonSettings);
         field(network,"接口刷新 / 重连基准间隔（5～300秒）","webInterval","5",false);note(network,"自动识别支持原红包池接口与 bili-lottery 推送页面。其他JSON接口可手动映射字段、金额单位和绝对开奖时间。推送网站如需user/key，请填写该网站自己的凭据；不会使用B站账号密码。");
         link(network,"打开原网页",()->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(PoolEndpoint.source(p.s("webUrl",PoolEndpoint.DEFAULT)).replaceFirst("/api/state$",""))));}catch(RuntimeException e){toast("网页地址无效");}});
+        targetSettings();
         LinearLayout b=settingSection("黑名单");field(b,"房间号（逗号或换行分隔）","blacklist","",true);note(b,"黑名单在接收消息和进房前都会检查。");
         LinearLayout timing=settingSection("任务与自动休眠");field(timing,"提前进房基准 / 秒","before","60",false);field(timing,"进房时间随机波动 ±秒（0关闭）","beforeJitter","10",false);field(timing,"开奖后最少留存 / 秒","after","30",false);field(timing,"留存额外随机增加 0～秒（0关闭）","afterExtra","10",false);
         note(timing,"默认提前50～70秒进房，开奖后留存30～40秒。同一任务只抽取一次；设置修改影响尚未排定时间的新任务。时间波动不保证避免平台识别。");
         field(timing,"连续多少个明确未中奖后休眠","lossLimit","10",false);field(timing,"多久后自动恢复 / 分钟","restMinutes","60",false);button(timing,"清零连续未中奖",this::clearLosses);
         Switch club=new Switch(this);club.setText("每个房间首次允许1电池入团");club.setTextColor(INK);club.setChecked(p.b("allowOneBattery",false));club.setOnCheckedChangeListener((v,on)->p.put("allowOneBattery",on));timing.addView(club);note(timing,"默认关闭。仅限明确标注需入团（1电池）的红包；每个房间只尝试一次。其他付费弹窗或超过1电池时停止。");
-        note(timing,"已参与后停留在红包面板等开奖。同房多个红包按最长留存处理。留存到点后返回B站首页并确认退出，才进入新房间；休眠期间也会先完成退出。20电池不参加。同日再次进房不发消息。进房失败两次当天跳过。");
+        note(timing,"已参与后停留在红包面板等开奖。同房多个红包按最长留存处理。留存到点后返回B站首页并确认退出，才进入新房间；休眠期间也会先完成退出。参与金额与期望按“目标红包”筛选。同日再次进房不发消息。进房失败两次当天跳过。");
         LinearLayout mystic=settingSection("玄学抢红包");
         Switch multi=new Switch(this);multi.setText("在抢红包页面多指点击红包");multi.setTextColor(INK);multi.setChecked(p.b("mysticMultiTap",false));multi.setOnCheckedChangeListener((v,on)->p.put("mysticMultiTap",on));mystic.addView(multi);
         note(mystic,"默认关闭。确认已参与后，在等待开奖时以3～8指快速点按当前红包卡片的装饰区域，每轮3次短按，约每1.8秒一轮。避开抢、领取和关闭按钮；开奖前3秒停止。不改变抽奖结果，也没有证据能提高中奖率。系统或页面无法确认时不执行。");
@@ -197,8 +199,28 @@ public class MainActivity extends Activity {
         field(dual,"进房验证房间号（两个账号统一使用B站内搜索）","routeRoom","",false);
         for(boolean backup:new boolean[]{false,true})button(dual,backup?"按房间号验证备用账号进房":"验证主账号进房",()->{PocketService service=PocketService.instance;if(service==null){toast("请先开启无障碍");return;}if(service.running){toast("请先停止任务");return;}String target=p.s("routeRoom","");if(!target.matches("[1-9][0-9]{0,14}")){toast("先填写验证房间号");return;}moveTaskToBack(true);handler.postDelayed(()->service.previewRoomRoute(target,backup),2000);});
         LinearLayout safe=settingSection("异常停止");note(safe,"当前验证锁定："+p.s("verificationLock","无"));button(safe,"已人工处理验证，解除本地锁定",()->new AlertDialog.Builder(this).setTitle("解除本地锁定").setMessage("请先在B站中手动完成验证并确认账号状态正常。解除只允许再次启动，不代表平台限制已解除。").setPositiveButton("确认已处理",(d,w)->{p.put("verificationLock","");show("设置");}).setNegativeButton("取消",null).show());
-        LinearLayout about=settingSection("关于与更新");note(about,"0.1.13 · 网页读取 / 折叠设置 / 房间快捷操作\n任务与通知记录保存在手机；不保存截图文件。\n单账号流程；双开调度暂未启用。网址不代表统一数据格式，未识别的站点需要选择读取方式并映射字段。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
+        LinearLayout about=settingSection("关于与更新");note(about,"0.1.14 · 目标红包 / 深色房间菜单\n任务与通知记录保存在手机；不保存截图文件。\n单账号流程；双开调度暂未启用。网址不代表统一数据格式，未识别的站点需要选择读取方式并映射字段。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
     }
+    void targetSettings(){
+        LinearLayout box=settingSection("目标红包");note(box,"当前 · "+p.target().description());RadioGroup modes=new RadioGroup(this);modes.setOrientation(1);box.addView(modes);
+        String[] values={"default","total","share"},labels={"模式一 · 默认（总电池 > 20）","模式二 · 红包电池 ≥","模式三 · 红包期望 ≥"};int[] ids=new int[3];
+        for(int i=0;i<3;i++){RadioButton radio=new RadioButton(this);radio.setId(View.generateViewId());ids[i]=radio.getId();radio.setText(labels[i]);radio.setTextSize(15);radio.setTextColor(INK);radio.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));modes.addView(radio);}
+        int selected=Arrays.asList(values).indexOf(p.s("targetMode","default"));modes.check(ids[Math.max(0,selected)]);
+        LinearLayout totalBox=new LinearLayout(this);totalBox.setOrientation(1);note(totalBox,"红包电池总量下限（电池）");EditText total=targetInput(totalBox,p.s("targetTotal","100"));box.addView(totalBox);
+        LinearLayout shareBox=new LinearLayout(this);shareBox.setOrientation(1);note(shareBox,"红包期望下限（电池/份）");EditText share=targetInput(shareBox,p.s("targetShare","10"));box.addView(shareBox);
+        Runnable paint=()->{totalBox.setVisibility(modes.getCheckedRadioButtonId()==ids[1]?View.VISIBLE:View.GONE);shareBox.setVisibility(modes.getCheckedRadioButtonId()==ids[2]?View.VISIBLE:View.GONE);};modes.setOnCheckedChangeListener((g,id)->paint.run());paint.run();
+        note(box,"期望 = 红包总电池 ÷ 份数，例如100电池/5份 = 20电池/份。支持小数，边界含等于。自定义模式以填写阈值为准，可包含20电池；期望模式下份数未知则不参与。关注/粉丝团、黑名单与其他条件继续生效。");
+        button(box,"应用目标红包设置",()->{
+            if(PocketService.instance!=null&&PocketService.instance.running){toast("请先停止自动任务再修改目标红包");return;}
+            String mode=modes.getCheckedRadioButtonId()==ids[1]?"total":modes.getCheckedRadioButtonId()==ids[2]?"share":"default",totalValue=total.getText().toString().trim(),shareValue=share.getText().toString().trim();
+            try{TargetRule rule=TargetRule.of(mode,mode.equals("share")?shareValue:totalValue);String oldMode=p.s("targetMode","default"),oldTotal=p.s("targetTotal","100"),oldShare=p.s("targetShare","10");
+                p.p.edit().putString("targetMode",mode).putString("targetTotal",totalValue).putString("targetShare",shareValue).apply();
+                try{repo.refilter(p);}catch(RuntimeException e){p.p.edit().putString("targetMode",oldMode).putString("targetTotal",oldTotal).putString("targetShare",oldShare).apply();throw e;}
+                repo.log("目标红包",rule.description()+"；已重新筛选缓存消息与待执行队列");hideKeyboard();show("设置");toast("目标红包已应用，消息与队列已同步更新");
+            }catch(IllegalArgumentException e){toast(e.getMessage());}catch(RuntimeException e){toast("保存失败："+e.getClass().getSimpleName());}
+        });
+    }
+    EditText targetInput(LinearLayout box,String value){EditText edit=new EditText(this);edit.setText(value);edit.setTextColor(INK);edit.setTextSize(16);edit.setSingleLine();edit.setInputType(android.text.InputType.TYPE_CLASS_NUMBER|android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);box.addView(edit,new LinearLayout.LayoutParams(-1,-2));return edit;}
     String readerLabel(){return p.s("webReader","auto").equals("ws")?"WebSocket 推送":p.s("webReader","auto").equals("json")?"自定义 JSON 接口":"自动识别（推荐）";}
     boolean changeReader(Runnable update){PocketService service=PocketService.instance;if(service!=null&&service.running){toast("请先停止任务再修改读取方式");return false;}boolean listening=p.b("listen",false);p.put("listen",false);if(service!=null&&service.web!=null)service.web.sync();update.run();p.put("webLastSuccess","0");p.put("webStatus","读取设置已更新");if(listening&&service!=null&&service.web!=null){p.put("listen",true);service.web.refresh();}show("设置");return true;}
     void chooseReader(){String[] values={"auto","ws","json"},labels={"自动识别：接口或网页声明的推送","WebSocket：推送地址或可识别页面","自定义 JSON：直接接口与字段映射"};int chosen=Arrays.asList(values).indexOf(p.s("webReader","auto"));final int[] selected={Math.max(0,chosen)};new AlertDialog.Builder(this).setTitle("网页读取方式").setSingleChoiceItems(labels,selected[0],(d,i)->selected[0]=i).setNegativeButton("取消",null).setPositiveButton("应用",(d,w)->changeReader(()->p.put("webReader",values[selected[0]]))).show();}

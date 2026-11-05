@@ -17,6 +17,9 @@ final class GenericJsonParser {
         if(m.optString("followValue","关注").equals(m.optString("fanclubValue","粉丝团")))throw new IllegalArgumentException("关注和粉丝团条件值不能相同");return m;
     }
     static List<PacketNotice> parse(String json,String schema,long now)throws JSONException {
+        return TargetRule.defaults().apply(parseData(json,schema,now));
+    }
+    static List<PacketNotice> parseData(String json,String schema,long now)throws JSONException {
         JSONObject m=mapping(schema);Object root=new JSONTokener(json).nextValue(),data=path(root,m.getString("list"));
         if(!(data instanceof JSONArray))throw new IllegalArgumentException("JSON 列表路径未找到，请检查 list 映射");JSONArray rows=(JSONArray)data;if(rows.length()>1000)throw new IllegalArgumentException("接口条目过多");
         String updated=m.optString("updated","");if(!updated.isEmpty()){long time=timestamp(value(root,updated),m.optString("updatedUnit",m.getString("timeUnit")));if(time<=0||now-time>120000||time-now>30000)throw new IllegalArgumentException("接口更新时间过旧或异常");}
@@ -26,7 +29,7 @@ final class GenericJsonParser {
             String condition=rawCondition.equals(m.optString("followValue","关注"))?"关注":rawCondition.equals(m.optString("fanclubValue","粉丝团"))?"粉丝团":PoolParser.shortText(rawCondition.isEmpty()?"未知条件":rawCondition);
             boolean battery=m.optString("kind","").isEmpty()?m.optBoolean("onlyBattery",false):matches(value(row,m.optString("kind")),m);
             String guard=m.optString("guard","");boolean blocked=!guard.isEmpty()&&!value(row,guard).equals(m.optString("guardAllowed","0"));
-            String reason=!room.matches("[1-9][0-9]{0,14}")?"房间号无效":!battery?"非电池红包或类型不明确":blocked?"附加领取条件，不参与":!condition.equals("关注")&&!condition.equals("粉丝团")?"仅参与关注或粉丝团条件":amount<0?"金额格式不明确":amount<=20?"20电池及以下，不参与":end<=now?"已开奖或时间无效":end-now>86400000?"开奖时间异常":"";
+            String reason=!room.matches("[1-9][0-9]{0,14}")?"房间号无效":!battery?"非电池红包或类型不明确":blocked?"附加领取条件，不参与":!condition.equals("关注")&&!condition.equals("粉丝团")?"仅参与关注或粉丝团条件":amount<0?"金额格式不明确":end<=now?"已开奖或时间无效":end-now>86400000?"开奖时间异常":"";
             String external=value(row,m.optString("id",""));String key="json:"+(external.isEmpty()?room+":"+end+":"+amount+":"+condition:PoolParser.shortText(external));if(!seen.add(key))continue;
             int shares=amount(value(row,m.optString("shares","")),"battery");out.add(new PacketNotice(key,room,PoolParser.shortText(value(row,m.optString("anchor",""))),end,amount,Math.max(0,shares),condition,(battery?"电池红包":"其他红包")+" · "+(amount<0?"金额未知":amount+"电池"),"popularity_red_pocket",reason,row.toString()));
         }return out;

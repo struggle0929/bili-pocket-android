@@ -41,7 +41,7 @@ final class WebPoolMonitor {
     }
     Read read(String page,String mode,String schema,String override)throws Exception{
         String address=PoolEndpoint.source(page);
-        if(mode.equals("json"))return new Read(GenericJsonParser.parse(download(PoolEndpoint.page(page)),schema,System.currentTimeMillis()),null);
+        if(mode.equals("json"))return new Read(GenericJsonParser.parseData(download(PoolEndpoint.page(page)),schema,System.currentTimeMillis()),null);
         if(!override.isEmpty())return new Read(null,PoolEndpoint.socket(override));
         if(address.startsWith("wss://"))return new Read(null,PoolEndpoint.socket(address));
         if(cachedPage.equals(address)&&!cachedSocket.isEmpty()&&System.currentTimeMillis()-discoveredAt<300000&&failures<2)return new Read(null,cachedSocket);
@@ -49,8 +49,8 @@ final class WebPoolMonitor {
         if(trimmed.startsWith("{")||trimmed.startsWith("[")){
             if(mode.equals("ws"))throw new IllegalArgumentException("该地址返回 JSON；请使用自动识别或填写 WSS 推送地址");
             Object json=new JSONTokener(trimmed).nextValue();
-            if(json instanceof JSONObject&&((JSONObject)json).has("redpocket"))return new Read(PoolParser.parse(body,System.currentTimeMillis()),null);
-            return new Read(LotteryParser.parse(body,System.currentTimeMillis()),null);
+            if(json instanceof JSONObject&&((JSONObject)json).has("redpocket"))return new Read(PoolParser.parseData(body,System.currentTimeMillis()),null);
+            return new Read(LotteryParser.parseData(body,System.currentTimeMillis()),null);
         }
         String endpoint=WsDiscovery.socket(body);
         if(endpoint==null)for(String script:WsDiscovery.scripts(PoolEndpoint.page(page),body)){endpoint=WsDiscovery.socket(download(script));if(endpoint!=null)break;}
@@ -67,7 +67,7 @@ final class WebPoolMonitor {
             @Override public void onMessage(WebSocket ws,String text){
                 if(closed)return;if(text.length()>2*1024*1024){main.post(()->{if(valid(epoch,selected)&&socket==ws)connectionFailed("推送消息超过2MB");});return;}
                 if(pendingFrames.incrementAndGet()>20){pendingFrames.decrementAndGet();main.post(()->{if(valid(epoch,selected)&&socket==ws)connectionFailed("推送更新过快，正在重新连接");});return;}
-                try{worker.execute(()->{List<PacketNotice> rows=null;String failure=null;try{rows=LotteryParser.parse(text,System.currentTimeMillis());}catch(Exception e){failure=error(e);}finally{pendingFrames.decrementAndGet();}final List<PacketNotice> packets=rows;final String message=failure;main.post(()->{if(!valid(epoch,selected)||socket!=ws)return;if(message!=null){connectionFailed(message);return;}lastFrame=System.currentTimeMillis();save(packets,new Prefs(context),"推送更新");});});}catch(RejectedExecutionException ignored){pendingFrames.decrementAndGet();}
+                try{worker.execute(()->{List<PacketNotice> rows=null;String failure=null;try{rows=LotteryParser.parseData(text,System.currentTimeMillis());}catch(Exception e){failure=error(e);}finally{pendingFrames.decrementAndGet();}final List<PacketNotice> packets=rows;final String message=failure;main.post(()->{if(!valid(epoch,selected)||socket!=ws)return;if(message!=null){connectionFailed(message);return;}lastFrame=System.currentTimeMillis();save(packets,new Prefs(context),"推送更新");});});}catch(RejectedExecutionException ignored){pendingFrames.decrementAndGet();}
             }
             @Override public void onFailure(WebSocket ws,Throwable t,Response response){main.post(()->{if(valid(epoch,selected)&&socket==ws)connectionFailed(response!=null?"推送握手 HTTP "+response.code()+(response.code()==401||response.code()==403?"，请检查网站 user/key":""):"推送连接失败 · "+t.getClass().getSimpleName());});}
             @Override public void onClosed(WebSocket ws,int code,String reason){main.post(()->{if(valid(epoch,selected)&&socket==ws)connectionFailed("网站关闭推送（"+code+"）"+(code==1008?"，请检查 user/key":""));});}

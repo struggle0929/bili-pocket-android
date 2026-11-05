@@ -71,6 +71,7 @@ final class Screen {
     boolean panelHas(String value){return panelText().contains(value);}
     boolean won(){return evidence().won();}
     Integer prizeBattery(){return won()&&prizeQuantity!=null&&prizeQuantity>0&&(batteryGlyph||panelText().contains("电池"))?prizeQuantity:null;}
+    int panelShares(){java.util.regex.Matcher m=java.util.regex.Pattern.compile("共\\s*([0-9]{1,6})\\s*份").matcher(panelText());return m.find()?Integer.parseInt(m.group(1)):0;}
     int panelSeconds(){
         java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?:(\\d+)\\s*分)?\\s*(\\d+)\\s*秒").matcher(panelText());
         return m.find()?Integer.parseInt(m.group(2))+(m.group(1)==null?0:60*Integer.parseInt(m.group(1))):-1;

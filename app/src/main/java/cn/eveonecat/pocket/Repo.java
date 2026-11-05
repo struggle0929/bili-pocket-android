@@ -6,18 +6,24 @@ import android.database.sqlite.*;
 import java.util.*;
 
 final class Repo extends SQLiteOpenHelper {
-    Repo(Context c){super(c,"pocket.db",null,5);}
+    final Context context;
+    Repo(Context c){super(c,"pocket.db",null,6);context=c.getApplicationContext();}
     public void onCreate(SQLiteDatabase db){
-        db.execSQL("CREATE TABLE tasks(id INTEGER PRIMARY KEY,room TEXT, end INTEGER,amount INTEGER,condition TEXT,state TEXT DEFAULT '等待',account TEXT DEFAULT '主账号',evidence TEXT DEFAULT '',prize_quantity INTEGER,prize_unit TEXT DEFAULT '',participated INTEGER NOT NULL DEFAULT 0,UNIQUE(room,end,account))");
+        db.execSQL("CREATE TABLE tasks(id INTEGER PRIMARY KEY,room TEXT, end INTEGER,amount INTEGER,shares INTEGER NOT NULL DEFAULT 0,condition TEXT,state TEXT DEFAULT '等待',account TEXT DEFAULT '主账号',evidence TEXT DEFAULT '',prize_quantity INTEGER,prize_unit TEXT DEFAULT '',participated INTEGER NOT NULL DEFAULT 0,UNIQUE(room,end,account))");
         db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY,stamp INTEGER,kind TEXT,detail TEXT)");
         db.execSQL("CREATE TABLE visits(day TEXT,room TEXT,PRIMARY KEY(day,room))");
         db.execSQL("CREATE TABLE messages_seen(fingerprint TEXT PRIMARY KEY,stamp INTEGER)");
         createFeedTables(db);
     }
-    public void onUpgrade(SQLiteDatabase db,int a,int b){if(a<2)db.execSQL("CREATE TABLE IF NOT EXISTS messages_seen(fingerprint TEXT PRIMARY KEY,stamp INTEGER)");if(a<3){db.execSQL("ALTER TABLE tasks ADD COLUMN prize_quantity INTEGER");db.execSQL("ALTER TABLE tasks ADD COLUMN prize_unit TEXT DEFAULT ''");}if(a<4){createFeedTables(db);db.execSQL("INSERT OR IGNORE INTO task_sources(task_id,source) SELECT id,'qq' FROM tasks");}if(a<5){db.execSQL("ALTER TABLE tasks ADD COLUMN participated INTEGER NOT NULL DEFAULT 0");db.execSQL("UPDATE tasks SET participated=1 WHERE state IN ('已参与','中奖','未中奖')");}}
+    public void onUpgrade(SQLiteDatabase db,int a,int b){if(a<2)db.execSQL("CREATE TABLE IF NOT EXISTS messages_seen(fingerprint TEXT PRIMARY KEY,stamp INTEGER)");if(a<3){db.execSQL("ALTER TABLE tasks ADD COLUMN prize_quantity INTEGER");db.execSQL("ALTER TABLE tasks ADD COLUMN prize_unit TEXT DEFAULT ''");}if(a<4){createFeedTables(db);db.execSQL("INSERT OR IGNORE INTO task_sources(task_id,source) SELECT id,'qq' FROM tasks");}if(a<5){db.execSQL("ALTER TABLE tasks ADD COLUMN participated INTEGER NOT NULL DEFAULT 0");db.execSQL("UPDATE tasks SET participated=1 WHERE state IN ('已参与','中奖','未中奖')");}if(a<6){
+        db.execSQL("ALTER TABLE tasks ADD COLUMN shares INTEGER NOT NULL DEFAULT 0");
+        if(a>=4)db.execSQL("ALTER TABLE notices ADD COLUMN base_reason TEXT NOT NULL DEFAULT ''");
+        db.execSQL("UPDATE notices SET base_reason=CASE WHEN reason='20电池及以下，不参与' THEN '' ELSE coalesce(reason,'') END");
+        db.execSQL("UPDATE tasks SET shares=coalesce((SELECT n.shares FROM notices n WHERE n.task_id=tasks.id ORDER BY n.received DESC LIMIT 1),0)");
+    }}
     static void createFeedTables(SQLiteDatabase db){
         db.execSQL("CREATE TABLE task_sources(task_id INTEGER NOT NULL,source TEXT NOT NULL,PRIMARY KEY(task_id,source))");
-        db.execSQL("CREATE TABLE notices(id INTEGER PRIMARY KEY,source TEXT NOT NULL,source_name TEXT,external_id TEXT NOT NULL,received INTEGER,end INTEGER,room TEXT,anchor TEXT,amount INTEGER,shares INTEGER,condition TEXT,reward TEXT,kind TEXT,reason TEXT,raw TEXT,task_id INTEGER,UNIQUE(source,external_id))");
+        db.execSQL("CREATE TABLE notices(id INTEGER PRIMARY KEY,source TEXT NOT NULL,source_name TEXT,external_id TEXT NOT NULL,received INTEGER,end INTEGER,room TEXT,anchor TEXT,amount INTEGER,shares INTEGER,condition TEXT,reward TEXT,kind TEXT,base_reason TEXT NOT NULL DEFAULT '',reason TEXT,raw TEXT,task_id INTEGER,UNIQUE(source,external_id))");
         db.execSQL("CREATE INDEX notices_source_time ON notices(source,end)");
         db.execSQL("CREATE INDEX IF NOT EXISTS notices_task ON notices(task_id,received)");
     }
@@ -40,26 +46,36 @@ final class Repo extends SQLiteOpenHelper {
         if(getWritableDatabase().insertWithOnConflict("messages_seen",null,seen,SQLiteDatabase.CONFLICT_IGNORE)==-1)return;
         getWritableDatabase().delete("messages_seen","stamp < ?",new String[]{""+(System.currentTimeMillis()-86400000)});log("QQ消息",text);
         long now=System.currentTimeMillis();String stale=now-sent>120000||sent-now>30000?"通知时间过旧或异常":"";
-        int count=saveNotices("qq",sourceName,NoticeParser.parse(text,sent),p,stale,now);
+        int count=saveNotices("qq",sourceName,NoticeParser.parseData(text,sent),p,stale,now);
         log("解析","新增 "+count+" 个任务；消息页按红包分块展示");
     }
     int saveNotices(String source,String sourceName,List<PacketNotice> notices,Prefs p,String override,long now){
         SQLiteDatabase db=getWritableDatabase();int added=0;db.beginTransaction();
-        try{
-            for(PacketNotice n:notices){
-                String reason=!override.isEmpty()?override:n.reason();if(PacketParser.blacklisted(p.s("blacklist",""),n.room()))reason="黑名单房间，不参与";
-                if(reason.isEmpty()&&n.end()<=now)reason="已开奖";
-                Long task=null;try(Cursor previous=db.rawQuery("SELECT task_id FROM notices WHERE source=? AND external_id=?",new String[]{source,n.key()})){if(previous.moveToFirst()&&!previous.isNull(0))task=previous.getLong(0);}
-                if(reason.isEmpty()){
-                    try(Cursor c=db.rawQuery("SELECT id FROM tasks WHERE room=? AND amount=? AND condition=? AND abs(end-?)<3000",new String[]{n.room(),""+n.amount(),n.condition(),""+n.end()})){task=c.moveToFirst()?c.getLong(0):null;}
-                    if(task==null){ContentValues t=new ContentValues();t.put("room",n.room());t.put("end",n.end());t.put("amount",n.amount());t.put("condition",n.condition());long id=db.insertWithOnConflict("tasks",null,t,SQLiteDatabase.CONFLICT_IGNORE);if(id!=-1){task=id;added++;}else reason="同房同秒红包冲突，未加入队列";}
-                    if(task!=null){ContentValues link=new ContentValues();link.put("task_id",task);link.put("source",source);db.insertWithOnConflict("task_sources",null,link,SQLiteDatabase.CONFLICT_IGNORE);}
-                }
-                ContentValues v=new ContentValues();v.put("source",source);v.put("source_name",sourceName);v.put("external_id",n.key());v.put("received",now);v.put("end",n.end());v.put("room",n.room());v.put("anchor",n.anchor());v.put("amount",n.amount());v.put("shares",n.shares());v.put("condition",n.condition());v.put("reward",n.reward());v.put("kind",n.kind());v.put("reason",reason);v.put("raw",n.raw());if(task==null)v.putNull("task_id");else v.put("task_id",task);
-                if(db.update("notices",v,"source=? AND external_id=?",new String[]{source,n.key()})==0)db.insertOrThrow("notices",null,v);
-            }
+        try{for(PacketNotice n:notices)added+=storeNotice(db,source,sourceName,n,p,override,now,now);
             db.execSQL("DELETE FROM notices WHERE id NOT IN (SELECT id FROM notices ORDER BY received DESC,id DESC LIMIT 500)");db.setTransactionSuccessful();
         }finally{db.endTransaction();}return added;
+    }
+    int storeNotice(SQLiteDatabase db,String source,String sourceName,PacketNotice n,Prefs p,String override,long received,long now){
+        String base=!override.isEmpty()?override:n.reason(),reason=base;
+        if(PacketParser.blacklisted(p.s("blacklist",""),n.room()))reason="黑名单房间，不参与";
+        if(reason.isEmpty()){if(n.end()<=now)reason="已开奖";else if(n.end()-now>86400000)reason="开奖时间异常";else reason=p.target().reason(n.amount(),n.shares());}
+        Long task=null;int added=0;
+        try(Cursor previous=db.rawQuery("SELECT task_id FROM notices WHERE source=? AND external_id=?",new String[]{source,n.key()})){if(previous.moveToFirst()&&!previous.isNull(0))task=previous.getLong(0);}
+        if(reason.isEmpty()){
+            try(Cursor c=db.rawQuery("SELECT id FROM tasks WHERE room=? AND amount=? AND condition=? AND abs(end-?)<3000",new String[]{n.room(),""+n.amount(),n.condition(),""+n.end()})){task=c.moveToFirst()?c.getLong(0):null;}
+            if(task==null){ContentValues t=new ContentValues();t.put("room",n.room());t.put("end",n.end());t.put("amount",n.amount());t.put("shares",n.shares());t.put("condition",n.condition());long id=db.insertWithOnConflict("tasks",null,t,SQLiteDatabase.CONFLICT_IGNORE);if(id!=-1){task=id;added++;}else reason="同房同秒红包冲突，未加入队列";}
+            if(task!=null){ContentValues link=new ContentValues();link.put("task_id",task);link.put("source",source);db.insertWithOnConflict("task_sources",null,link,SQLiteDatabase.CONFLICT_IGNORE);ContentValues count=new ContentValues();count.put("shares",n.shares());db.update("tasks",count,"id=? AND state='等待'",new String[]{""+task});}
+        }
+        ContentValues v=new ContentValues();v.put("source",source);v.put("source_name",sourceName);v.put("external_id",n.key());v.put("received",received);v.put("end",n.end());v.put("room",n.room());v.put("anchor",n.anchor());v.put("amount",n.amount());v.put("shares",n.shares());v.put("condition",n.condition());v.put("reward",n.reward());v.put("kind",n.kind());v.put("base_reason",base);v.put("reason",reason);v.put("raw",n.raw());if(task==null)v.putNull("task_id");else v.put("task_id",task);
+        if(db.update("notices",v,"source=? AND external_id=?",new String[]{source,n.key()})==0)db.insertOrThrow("notices",null,v);return added;
+    }
+    record SavedNotice(String source,String sourceName,long received,PacketNotice notice){}
+    void refilter(Prefs p){
+        SQLiteDatabase db=getWritableDatabase();long now=System.currentTimeMillis();List<SavedNotice> rows=new ArrayList<>();
+        try(Cursor c=db.rawQuery("SELECT source,source_name,received,external_id,room,anchor,end,amount,shares,condition,reward,kind,base_reason,raw FROM notices ORDER BY received,id",null)){
+            while(c.moveToNext())rows.add(new SavedNotice(c.getString(0),c.getString(1),c.getLong(2),new PacketNotice(c.getString(3),c.getString(4),c.getString(5),c.getLong(6),c.getInt(7),c.getInt(8),c.getString(9),c.getString(10),c.getString(11),c.getString(12),c.getString(13))));
+        }
+        db.beginTransaction();try{for(SavedNotice row:rows)storeNotice(db,row.source(),row.sourceName(),row.notice(),p,"",row.received(),now);db.setTransactionSuccessful();}finally{db.endTransaction();}
     }
     record NoticeRow(long id,String sourceName,long received,long end,String room,String anchor,int amount,int shares,String condition,String reward,String reason,String raw,String state,String kind){}
     List<NoticeRow> notices(String source){
@@ -68,9 +84,9 @@ final class Repo extends SQLiteOpenHelper {
             while(c.moveToNext())rows.add(new NoticeRow(c.getLong(0),c.getString(1),c.getLong(2),c.getLong(3),c.getString(4),c.getString(5),c.getInt(6),c.getInt(7),c.getString(8),c.getString(9),c.getString(10),c.getString(11),c.getString(12),c.getString(13)));
         }return rows;
     }
-    static class Task {long id,end;String room,state;int amount; Task(Cursor c){id=c.getLong(0);room=c.getString(1);end=c.getLong(2);amount=c.getInt(3);state=c.getString(4);}}
-    List<Task> tasks(){List<Task> list=new ArrayList<>();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,room,end,amount,state FROM tasks ORDER BY CASE WHEN state IN ('中奖','未中奖','未参与','无法确认','已过期','黑名单','进房失败','已跳过') THEN 1 ELSE 0 END,end ASC",null)){while(c.moveToNext())list.add(new Task(c));}return list;}
-    List<Task> tasksForSource(String source){List<Task> list=new ArrayList<>();try(Cursor c=getReadableDatabase().rawQuery("SELECT t.id,t.room,t.end,t.amount,t.state FROM tasks t JOIN task_sources s ON s.task_id=t.id WHERE s.source=? AND (s.source='qq' OR t.state<>'等待' OR EXISTS (SELECT 1 FROM notices n WHERE n.source=s.source AND n.task_id=t.id AND n.reason='')) ORDER BY CASE WHEN t.state IN ('中奖','未中奖','未参与','无法确认','已过期','黑名单','进房失败','已跳过') THEN 1 ELSE 0 END,t.end ASC",new String[]{source})){while(c.moveToNext())list.add(new Task(c));}return list;}
+    static class Task {long id,end;String room,state;int amount,shares; Task(Cursor c){id=c.getLong(0);room=c.getString(1);end=c.getLong(2);amount=c.getInt(3);state=c.getString(4);shares=c.getInt(5);}}
+    List<Task> tasks(){List<Task> list=new ArrayList<>();try(Cursor c=getReadableDatabase().rawQuery("SELECT id,room,end,amount,state,shares FROM tasks ORDER BY CASE WHEN state IN ('中奖','未中奖','未参与','无法确认','已过期','黑名单','进房失败','已跳过') THEN 1 ELSE 0 END,end ASC",null)){while(c.moveToNext())list.add(new Task(c));}return list;}
+    List<Task> tasksForSource(String source){List<Task> list=new ArrayList<>();TargetRule target=new Prefs(context).target();try(Cursor c=getReadableDatabase().rawQuery("SELECT t.id,t.room,t.end,t.amount,t.state,t.shares FROM tasks t JOIN task_sources s ON s.task_id=t.id WHERE s.source=? AND (t.state<>'等待' OR (s.source='qq' AND NOT EXISTS (SELECT 1 FROM notices old WHERE old.source=s.source AND old.task_id=t.id)) OR EXISTS (SELECT 1 FROM notices n WHERE n.source=s.source AND n.task_id=t.id AND n.reason='')) ORDER BY CASE WHEN t.state IN ('中奖','未中奖','未参与','无法确认','已过期','黑名单','进房失败','已跳过') THEN 1 ELSE 0 END,t.end ASC",new String[]{source})){while(c.moveToNext()){Task task=new Task(c);if(!task.state.equals("等待")||target.reason(task.amount,task.shares).isEmpty())list.add(task);}}return list;}
     void state(long id,String state,String evidence){ContentValues v=new ContentValues();v.put("state",state);v.put("evidence",evidence);if(state.equals("已参与"))v.put("participated",1);int updated=getWritableDatabase().update("tasks",v,"id=? AND state NOT IN ('中奖','未中奖','未参与')",new String[]{""+id});if(updated>0)log(state,"任务 "+id+" "+evidence);}
     boolean win(long id,Integer quantity,String unit,String evidence){
         SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
