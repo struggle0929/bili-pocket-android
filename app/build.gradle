@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'cn.eveonecat.pocket'
     compileSdk 35
-    defaultConfig { applicationId 'cn.eveonecat.pocket'; minSdk 30; targetSdk 35; versionCode 12; versionName '0.1.11' }
+    defaultConfig { applicationId 'cn.eveonecat.pocket'; minSdk 30; targetSdk 35; versionCode 13; versionName '0.1.12' }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     signingConfigs {
         release {
@@ -19,4 +19,5 @@ android {
 dependencies {
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
 }

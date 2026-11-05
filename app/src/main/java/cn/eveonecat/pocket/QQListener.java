@@ -8,10 +8,11 @@ public class QQListener extends NotificationListenerService {
     public static volatile boolean connected;
     public static QQListener instance;
     final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());
-    final Runnable poll=new Runnable(){public void run(){if(connected&&new Prefs(QQListener.this).b("listen",false))refresh(false);handler.postDelayed(this,5000);}};
+    final Runnable poll=new Runnable(){public void run(){Prefs p=new Prefs(QQListener.this);if(connected&&p.b("listen",false)&&!p.webMode())refresh(false);handler.postDelayed(this,5000);}};
     @Override public void onListenerConnected(){instance=this;connected=true;handler.removeCallbacks(poll);handler.post(poll);try(Repo r=new Repo(this)){r.log("QQ通知监听","系统通知监听已连接；每5秒补查活动通知，兼容系统分身 QQ");}}
     public void refresh(){refresh(true);}
     void refresh(boolean report){
+        if(new Prefs(this).webMode())return;
         int qq=0,matched=0;StringBuilder profiles=new StringBuilder();
         try{for(StatusBarNotification n:getActiveNotifications())if(n.getPackageName().equals("com.tencent.mobileqq")){
             qq++;profiles.append(n.getUser()).append(' ');
@@ -25,7 +26,7 @@ public class QQListener extends NotificationListenerService {
     @Override public void onDestroy(){handler.removeCallbacks(poll);if(instance==this){instance=null;connected=false;}super.onDestroy();}
     @Override public void onNotificationPosted(StatusBarNotification sbn){
         if(!sbn.getPackageName().equals("com.tencent.mobileqq"))return;
-        Prefs p=new Prefs(this); if(!p.b("listen",false))return;
+        Prefs p=new Prefs(this); if(!p.b("listen",false)||p.webMode())return;
         Bundle b=sbn.getNotification().extras;
         String title=String.valueOf(b.getCharSequence(Notification.EXTRA_TITLE,""));
         String conversation=String.valueOf(b.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE,""));
@@ -35,13 +36,13 @@ public class QQListener extends NotificationListenerService {
         if(group.isEmpty()||!(title.contains(group)||conversation.contains(group)||subtitle.contains(group)))return;
         try(Repo r=new Repo(this)){
             android.os.Parcelable[] entries=b.getParcelableArray(Notification.EXTRA_MESSAGES);
-            if(entries!=null&&entries.length>0){for(int i=Math.max(0,entries.length-30);i<entries.length;i++)if(entries[i] instanceof Bundle){Bundle m=(Bundle)entries[i];CharSequence t=m.getCharSequence("text");if(t!=null)r.ingest(t.toString(),m.getLong("time",sbn.getPostTime()),p);}return;}
+            if(entries!=null&&entries.length>0){for(int i=Math.max(0,entries.length-30);i<entries.length;i++)if(entries[i] instanceof Bundle){Bundle m=(Bundle)entries[i];CharSequence t=m.getCharSequence("text");String sender=String.valueOf(m.getCharSequence("sender",""));if(t!=null)r.ingest(t.toString(),m.getLong("time",sbn.getPostTime()),p,"QQ · "+group+(sender.isEmpty()?"":" · "+sender));}return;}
             CharSequence big=b.getCharSequence(Notification.EXTRA_BIG_TEXT);
             CharSequence text=big!=null?big:b.getCharSequence(Notification.EXTRA_TEXT,"");
             // InboxStyle can preserve bot message lines beyond the compact notification preview.
             CharSequence[] lines=b.getCharSequenceArray(Notification.EXTRA_TEXT_LINES);
             if(lines!=null&&lines.length>0){StringBuilder all=new StringBuilder();for(CharSequence line:lines)all.append(line).append('\n');if(all.length()>text.length())text=all;}
-            r.ingest(text.toString(),sbn.getPostTime(),p);
+            r.ingest(text.toString(),sbn.getPostTime(),p,"QQ · "+group);
         }catch(RuntimeException e){
             // A malformed third-party notification must not kill the listener service.
             try(Repo r=new Repo(this)){r.log("QQ通知解析失败",e.getClass().getSimpleName());}

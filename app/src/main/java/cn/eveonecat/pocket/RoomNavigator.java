@@ -63,7 +63,7 @@ final class RoomNavigator {
         List<AccessibilityNodeInfo> nodes=new ArrayList<>();service.walk(root,nodes);
         List<AccessibilityNodeInfo> visible=new ArrayList<>();for(AccessibilityNodeInfo n:nodes)if(n.isVisibleToUser()||id(n).endsWith("/search_src_text")||id(n).endsWith("/action_search")||id(n).endsWith("/tab_title"))visible.add(n);
         for(AccessibilityNodeInfo n:visible)if(text(n).matches(".*(人机验证|安全验证|请完成验证|拖动滑块).*")){
-            service.capture("verification");service.stop("进房验证遇到人机验证",true);cancelled=true;return;
+            service.stop("进房验证遇到人机验证",true);cancelled=true;return;
         }
         if(stage==0){
             for(AccessibilityNodeInfo n:visible)if((n.isEditable()||String.valueOf(n.getClassName()).contains("EditText"))&&id(n).contains("search")){
@@ -160,7 +160,7 @@ final class RoomNavigator {
                 if(part!=full)full.recycle();
                 Screen.read(part,screen->{
                     if(cancelled||service.running)return;
-                    if(screen.has("人机验证")||screen.has("安全验证")||screen.has("拖动滑块")){cancelled=true;service.capture("verification");service.stop("进房搜索遇到验证",true);return;}
+                    if(screen.has("人机验证")||screen.has("安全验证")||screen.has("拖动滑块")){cancelled=true;service.stop("进房搜索遇到验证",true);return;}
                     if(stage==2){
                         for(Screen.Label label:screen.labels)if(label.text.replaceAll("\\s","").equals("直播")&&label.rect.centerY()<screen.height*.25&&label.rect.centerX()>screen.width*.12){
                             service.tap(crop.left+label.rect.centerX(),crop.top+label.rect.centerY());stage=3;liveTabSelected=true;log("已按目标窗口画面点击直播标签");later(1600);return;

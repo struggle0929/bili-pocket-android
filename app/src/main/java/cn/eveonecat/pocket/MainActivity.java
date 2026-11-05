@@ -14,9 +14,9 @@ import java.util.*;
 
 public class MainActivity extends Activity {
     final int BG=0xff17151e,CARD=0xff26222f,INK=0xfff3edf9,MUTED=0xffc1b6ce,ACCENT=0xffbd91ff;
-    Prefs p; Repo repo; LinearLayout content,base; TextView live,queue,logView,prizes;String page="任务",folder="";
+    Prefs p; Repo repo; LinearLayout content,base,taskRows,messageRows,recordRows; TextView live,logView,messageState,setupLink,statNote;Button receiveButton,pauseButton,startButton,stopButton;String page="任务",folder="",taskSignature="",messageSignature="";boolean taskHistory;TextView[] recordMetrics;int recordLimit=40;String recordSignature="";AutoCompleteTextView urlInput;UrlHistoryAdapter historyAdapter;
     final Handler handler=new Handler(Looper.getMainLooper());
-    final Runnable refresh=new Runnable(){public void run(){if(live!=null)live.setText(state());if(queue!=null)queue.setText(queueText());if(logView!=null)logView.setText(repo.events());if(prizes!=null)prizes.setText(repo.prizeSummary());handler.postDelayed(this,1500);}};
+    final Runnable refresh=new Runnable(){public void run(){if(live!=null)live.setText(state());if(setupLink!=null)setupLink.setVisibility(needsSetup()?View.VISIBLE:View.GONE);if(startButton!=null){boolean running=PocketService.instance!=null&&PocketService.instance.running;startButton.setEnabled(!running);stopButton.setEnabled(running);}if(taskRows!=null)renderTasks();if(messageRows!=null)renderMessages();if(messageState!=null)messageState.setText(feedState());if(receiveButton!=null)receiveButton.setText(p.b("listen",false)?"立即刷新":"开始接收");if(pauseButton!=null)pauseButton.setEnabled(p.b("listen",false));if(logView!=null)logView.setText(repo.events());if(recordRows!=null)renderRecords();handler.postDelayed(this,1500);}};
     @Override public void onCreate(Bundle b){super.onCreate(b);p=new Prefs(this);repo=new Repo(this);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);getWindow().getDecorView().setSystemUiVisibility(0);show("任务");handler.post(refresh);}
     @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);repo.close();super.onDestroy();}
     int dp(int x){return (int)(x*getResources().getDisplayMetrics().density);}
@@ -26,73 +26,129 @@ public class MainActivity extends Activity {
     void note(LinearLayout l,String s){l.addView(text(s,14,MUTED));}
     void button(LinearLayout l,String s,Runnable action){Button b=new Button(this);b.setText(s);b.setAllCaps(false);b.setTextColor(INK);b.setTextSize(15);b.setBackground(bg(0xff47335e,14));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(48));lp.topMargin=dp(8);l.addView(b,lp);b.setOnClickListener(v->action.run());}
     void show(String name){
-        page=name;live=null;queue=null;logView=null;prizes=null;base=new LinearLayout(this);base.setOrientation(1);base.setBackgroundColor(BG);
-        base.setPadding(dp(16),dp(36),dp(16),dp(28));setContentView(base);
-        TextView title=text("口袋 · 红包助手",26,INK);base.addView(title);base.addView(text("独立手机运行  /  QQ 通知 → B站 App",12,MUTED));
+        page=name;live=null;logView=null;statNote=null;recordRows=null;recordMetrics=null;recordSignature="";urlInput=null;historyAdapter=null;messageState=null;setupLink=null;receiveButton=null;pauseButton=null;startButton=null;stopButton=null;taskRows=null;messageRows=null;taskSignature="";messageSignature="";base=new LinearLayout(this);base.setOrientation(1);base.setBackgroundColor(BG);
+        base.setPadding(dp(16),dp(16),dp(16),dp(8));base.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());v.setPadding(dp(16)+bars.left,dp(16)+bars.top,dp(16)+bars.right,dp(8)+bars.bottom);return insets;});setContentView(base);base.requestApplyInsets();
+        TextView title=text("口袋 · 红包助手",22,INK);base.addView(title);base.addView(text("红包任务  /  QQ · 网页",12,MUTED));
         ScrollView scroll=new ScrollView(this);content=new LinearLayout(this);content.setOrientation(1);scroll.addView(content);base.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout nav=new LinearLayout(this);for(String tab:new String[]{"任务","消息","记录","设置"}){TextView t=text(tab,16,tab.equals(name)?ACCENT:MUTED);t.setGravity(Gravity.CENTER);nav.addView(t,new LinearLayout.LayoutParams(0,dp(50),1));t.setOnClickListener(v->show(tab));}base.addView(nav);
         switch(name){case "任务":home();break;case "消息":messages();break;case "记录":records();break;default:settings();}
     }
-    String state(){PocketService s=PocketService.instance;return PermissionStatus.summary(this)+"\n"+(s==null?"无障碍尚未连接":s.status+"\n"+(s.running?"运行中":"已停止")+" · 连续未中奖 "+p.n("losses",0)+" / "+p.n("lossLimit",10));}
+    String state(){PocketService service=PocketService.instance;return (service==null?"未运行 · 权限与连接请到设置检查":(service.running?"运行中 · ":"已停止 · ")+service.status)+"\n连续未中奖 "+p.n("losses",0)+" / "+p.n("lossLimit",10);}
+    String sourceKey(){try{return p.sourceKey();}catch(IllegalArgumentException e){return "web:invalid";}}
+    boolean needsSetup(){return PocketService.instance==null||!p.webMode()&&!PermissionStatus.notificationEnabled(this)||!p.s("verificationLock","").isEmpty();}
     void home(){
-        LinearLayout top=card("当前状态");live=text(state(),18,INK);top.addView(live);
-        button(top,"无障碍授权 / 修复直达",()->PermissionStatus.accessibility(this));
-        button(top,"QQ 通知授权直达",()->PermissionStatus.notifications(this));
-        if(!p.s("verificationLock","").isEmpty())button(top,"查看 / 解除本地停止锁",()->new AlertDialog.Builder(this).setTitle("本地停止原因").setMessage(p.s("verificationLock","")+"\n确认已经人工处理后才恢复运行。").setPositiveButton("确认已处理",(d,w)->{p.put("verificationLock","");show("任务");}).setNegativeButton("取消",null).show());
-        button(top,"检查 QQ 消息接收",()->{p.put("listen",true);if(QQListener.instance!=null)QQListener.instance.refresh();else toast("通知服务未连接，请重新授权");show("消息");});
-        button(top,"只读检查红包（3秒后截图识别）",()->{PocketService service=PocketService.instance;if(service==null){toast("请先连接无障碍");return;}moveTaskToBack(true);handler.postDelayed(service::inspectPacket,3000);});
-        button(top,"开始运行",()->{PocketService s=PocketService.instance;if(s==null){toast(PermissionStatus.accessibilityEnabled(this)?"权限已开启但服务未连接；请检查系统详情或后台设置":"请开启无障碍权限");PermissionStatus.accessibility(this);return;}s.start();live.setText(state());});
-        button(top,"停止运行",()->{if(PocketService.instance!=null)PocketService.instance.stop("用户手动停止",false);live.setText(state());});
-        button(top,"清零连续未中奖",this::clearLosses);
-        note(top,"保持屏幕亮起且解锁。悬浮彩字显示状态，点击 × 立即停止。验证码锁定不会定时重启。");
-        LinearLayout tasks=card("任务队列 · 越早开奖越靠前");button(tasks,"刷新任务",()->show("任务"));
-        List<DualPlan.Draw> planned=new ArrayList<>();
-        for(Repo.Task t:repo.tasks())if(t.state.equals("等待"))planned.add(new DualPlan.Draw(t.id,t.room,t.end));
-        if(p.b("dualExperimental",false)&&!planned.isEmpty()){
-            note(tasks,"双账号分配预览（尚不代表已进入房间；自动路由待验证）");
-            for(DualPlan.Reservation r:DualPlan.calculate(planned,System.currentTimeMillis(),Math.max(0,p.n("before",60))*1000L,Math.max(0,p.n("after",30))*1000L,p.b("dualPlan",true)))
-                note(tasks,r.room()+" → "+(r.account()<0?"无空闲账号":r.account()==0?"左侧主账号":"右侧备用账号")+" · "+r.state()+" · 红包数 "+r.tasks().size());
-        }
-        queue=text(queueText(),15,INK);tasks.addView(queue);
+        LinearLayout top=card("当前任务");note(top,p.webMode()?"消息来源 · 网页监控":"消息来源 · QQ 群通知");live=text(state(),16,INK);top.addView(live);
+        Button[] actions=controls(top,"开始运行",this::startRunner,"停止运行",()->{if(PocketService.instance!=null)PocketService.instance.stop("用户手动停止",false);if(live!=null)live.setText(state());});startButton=actions[0];stopButton=actions[1];stopButton.setEnabled(PocketService.instance!=null&&PocketService.instance.running);
+        link(top,"清零连续未中奖",this::clearLosses);
+        setupLink=link(top,"前往设置检查权限 / 停止原因",()->show("设置"));setupLink.setVisibility(needsSetup()?View.VISIBLE:View.GONE);
+        LinearLayout tasks=card("任务队列 · 开奖时间升序");taskRows=new LinearLayout(this);taskRows.setOrientation(1);tasks.addView(taskRows);renderTasks();
+        link(tasks,taskHistory?"收起已结束任务":"查看已结束任务",()->{taskHistory=!taskHistory;show("任务");});
     }
-    String queueText(){StringBuilder out=new StringBuilder();for(Repo.Task t:repo.tasks())out.append(t.room).append(" · ").append(t.amount).append("电池\n").append(new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(t.end))).append(" · ").append(t.state).append("\n\n");return out.length()==0?"等待目标 QQ 群的新红包通知。":out.toString();}
+    void startRunner(){PocketService service=PocketService.instance;if(service==null){toast("请在设置开启无障碍并确认服务连接");show("设置");return;}service.start();if(live!=null)live.setText(state());}
+    void renderTasks(){
+        long now=System.currentTimeMillis();List<Repo.Task> tasks=new ArrayList<>();StringBuilder signature=new StringBuilder();
+        List<Repo.Task> ordered=repo.tasksForSource(sourceKey());ordered.sort((a,b)->{boolean aa=a.state.matches("进房中|已参与|已点击待确认")||a.state.equals("等待")&&a.end>now,bb=b.state.matches("进房中|已参与|已点击待确认")||b.state.equals("等待")&&b.end>now;return aa!=bb?aa?-1:1:aa?Long.compare(a.end,b.end):Long.compare(b.end,a.end);});
+        for(Repo.Task t:ordered){boolean active=t.state.matches("进房中|已参与|已点击待确认")||t.state.equals("等待")&&t.end>now;if(active||taskHistory){tasks.add(t);signature.append(t.id).append(t.end).append(t.state).append(active);if(tasks.size()==30)break;}}
+        if(taskSignature.equals(signature.toString())&&taskRows.getChildCount()>0)return;taskSignature=signature.toString();taskRows.removeAllViews();
+        if(tasks.isEmpty()){note(taskRows,"暂无待执行任务，去消息页选择来源并接收红包。");return;}
+        for(Repo.Task t:tasks){LinearLayout row=new LinearLayout(this);row.setOrientation(1);row.setPadding(dp(12),dp(8),dp(12),dp(8));row.setBackground(bg(BG,12));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(8);taskRows.addView(row,lp);row.addView(text("房间 "+t.room+" · "+t.amount+" 电池",15,INK));note(row,new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(t.end))+" 开奖 · "+(t.state.equals("等待")&&t.end<=now?"已过期":t.state));}
+    }
+    Button compactButton(String title,Runnable action,int color){Button button=new Button(this);button.setText(title);button.setAllCaps(false);button.setTextSize(14);button.setTextColor(INK);button.setBackground(bg(color,12));button.setOnClickListener(v->action.run());return button;}
+    Button[] controls(LinearLayout parent,String first,Runnable a,String second,Runnable b){LinearLayout row=new LinearLayout(this);LinearLayout.LayoutParams rowLp=new LinearLayout.LayoutParams(-1,-2);rowLp.topMargin=dp(8);parent.addView(row,rowLp);Button left=compactButton(first,a,0xff624388),right=compactButton(second,b,0xff37313f);LinearLayout.LayoutParams x=new LinearLayout.LayoutParams(0,dp(44),1);x.rightMargin=dp(8);row.addView(left,x);row.addView(right,new LinearLayout.LayoutParams(0,dp(44),1));return new Button[]{left,right};}
+    TextView link(LinearLayout parent,String caption,Runnable action){TextView view=text(caption,13,ACCENT);view.setPadding(0,dp(12),0,dp(8));view.setOnClickListener(v->action.run());parent.addView(view);return view;}
     void clearLosses(){
         p.clearLosses();repo.log("手动清零","连续未中奖已清零，连续未中休眠已取消；历史记录及验证锁定保留");
         if(live!=null)live.setText(state());toast("连续未中奖已清零，休眠已取消");
     }
-    void messages(){LinearLayout c=card("QQ 消息自动接收");button(c,"仅监听 QQ 消息（不操作 B站）",()->{p.put("listen",true);toast("已开始监听匹配目标群的QQ通知");});button(c,"停止 QQ 消息监听",()->{p.put("listen",false);toast("已停止QQ通知接收");});note(c,"目标群标题关键词："+p.s("group","B站直播区游戏群"));note(c,"只读取 QQ 通知，不连接电脑。群免打扰、通知内容隐藏、QQ 合并或截断通知都会影响任务获取。通知缺少链接或时间时不会执行。");button(c,"打开通知读取授权",()->PermissionStatus.notifications(this));button(c,"刷新消息与解析结果",()->show("消息"));logView=text(repo.events(),13,INK);c.addView(logView);}
-    void records(){LinearLayout c=card("参与记录与获奖证据");prizes=text(repo.prizeSummary(),18,ACCENT);c.addView(prizes);note(c,"实际获奖数量单独保存；红包总额不是个人所得。截图补记会按中奖时间重新计算其后的连续未中，不发送历史感谢消息。");button(c,"从截图补记中奖",()->{if(PocketService.instance!=null&&PocketService.instance.running){toast("请先停止运行，再修正历史记录");return;}Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);i.putExtra("android.provider.extra.INITIAL_URI",Uri.parse("content://com.android.externalstorage.documents/document/primary:Download"));startActivityForResult(i,44);});button(c,"导出 CSV",()->{try{String path=FilesOut.write(this,"exports","红包记录-"+System.currentTimeMillis()+".csv",repo.csv().getBytes(StandardCharsets.UTF_8),"text/csv");toast("已导出："+path);repo.log("导出",path);}catch(Exception e){toast("导出失败："+e.getMessage());}});button(c,"选择导出目录",()->pick("exports"));button(c,"选择截图目录",()->pick("screenshots"));note(c,"导出目录："+p.s("exports","应用专属目录/exports")+"\n截图目录："+p.s("screenshots","应用专属目录/screenshots"));button(c,"截图留证",()->{if(PocketService.instance!=null)PocketService.instance.capture("manual");else toast("请先连接无障碍服务");});logView=text(repo.events(),13,INK);c.addView(logView);}
-    void inspectWinImage(Uri uri){
-        try{
-            android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options();options.inJustDecodeBounds=true;
-            try(java.io.InputStream in=getContentResolver().openInputStream(uri)){android.graphics.BitmapFactory.decodeStream(in,null,options);}
-            options.inSampleSize=1;while(options.outWidth/options.inSampleSize>1600||((long)options.outWidth*options.outHeight)/(options.inSampleSize*options.inSampleSize)>8000000)options.inSampleSize*=2;options.inJustDecodeBounds=false;
-            android.graphics.Bitmap image;try(java.io.InputStream in=getContentResolver().openInputStream(uri)){image=android.graphics.BitmapFactory.decodeStream(in,null,options);}if(image==null)throw new IllegalArgumentException("图片无法读取");
-            toast("正在识别中奖截图");
-            Screen.read(image,screen->{
-                if(!screen.won()){toast("没有识别到中奖标题和领取按钮，未改动记录");repo.log("截图检查","未识别到完整中奖面板");return;}
-                Integer battery=screen.prizeBattery();if(battery==null){toast("已识别中奖，但无法确认电池数量，未改动记录");return;}
-                String detected="";java.util.regex.Matcher room=java.util.regex.Pattern.compile("([1-9][0-9]{4,14})[·•]?连续未中").matcher(screen.text.replaceAll("\\s",""));if(room.find())detected=room.group(1);
-                String saved="";try(java.io.InputStream in=getContentResolver().openInputStream(uri);java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream()){byte[] data=new byte[8192];int n;while((n=in.read(data))!=-1){bytes.write(data,0,n);if(bytes.size()>20000000)throw new java.io.IOException("图片过大");}saved=FilesOut.write(this,"screenshots","recovered-win-"+System.currentTimeMillis()+".jpg",bytes.toByteArray(),"image/jpeg");}catch(Exception e){toast("截图保存失败，未改动记录");return;}
-                repo.log("中奖截图识别","房间 "+detected+" · 实际 "+battery+"电池 · "+screen.panelText());
-                repairWin(detected,battery,saved,screen.panelText());
-            },e->toast("截图识别失败："+e.getMessage()));
-        }catch(Exception e){toast("读取失败："+e.getMessage());}
+    void messages(){
+        LinearLayout source=card("消息来源");RadioGroup modes=new RadioGroup(this);modes.setOrientation(LinearLayout.HORIZONTAL);source.addView(modes);RadioButton qq=new RadioButton(this),web=new RadioButton(this);qq.setId(View.generateViewId());web.setId(View.generateViewId());qq.setText("QQ 群通知");web.setText("网页监控");qq.setTextColor(INK);web.setTextColor(INK);modes.addView(qq,new RadioGroup.LayoutParams(0,-2,1));modes.addView(web,new RadioGroup.LayoutParams(0,-2,1));modes.check(p.webMode()?web.getId():qq.getId());
+        final boolean[] changing={false};modes.setOnCheckedChangeListener((group,id)->{if(changing[0])return;PocketService service=PocketService.instance;if(service!=null&&service.running){toast("请先停止任务再切换消息来源");changing[0]=true;group.check(p.webMode()?web.getId():qq.getId());changing[0]=false;return;}p.put("listen",false);p.put("sourceMode",id==web.getId()?"web":"qq");show("消息");});
+        if(p.webMode()){
+            webAddress(source);
+        }else note(source,"目标群 · "+p.s("group","B站直播区游戏群"));
+        messageState=text(feedState(),13,ACCENT);source.addView(messageState);Button[] buttons=controls(source,p.b("listen",false)?"立即刷新":"开始接收",this::receive,"暂停接收",()->{p.put("listen",false);if(PocketService.instance!=null&&PocketService.instance.web!=null)PocketService.instance.web.sync();messageState.setText(feedState());});receiveButton=buttons[0];pauseButton=buttons[1];pauseButton.setEnabled(p.b("listen",false));
+        note(source,"自动进房请在任务页点击“开始运行”。");
+        messageRows=new LinearLayout(this);messageRows.setOrientation(1);content.addView(messageRows);renderMessages();
     }
-    void repairWin(String detected,int battery,String proof,String raw){
-        LinearLayout fields=new LinearLayout(this);fields.setOrientation(1);fields.setPadding(dp(22),dp(8),dp(22),dp(8));fields.addView(text("已识别中奖 "+battery+" 电池，请核对房间号",16,Color.DKGRAY));EditText room=new EditText(this);room.setSingleLine();room.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);room.setText(detected);fields.addView(room);
-        new AlertDialog.Builder(this).setTitle("补记中奖截图").setView(fields).setNegativeButton("取消",null).setPositiveButton("查找红包任务",(dialog,which)->{
-            List<Repo.Task> matches=new ArrayList<>();long now=System.currentTimeMillis();for(Repo.Task t:repo.tasks())if(t.room.equals(room.getText().toString().trim())&&t.end<=now&&!t.state.matches("黑名单|已过期|已跳过|进房失败|等待"))matches.add(t);
-            matches.sort((a,b)->Long.compare(b.end,a.end));if(matches.isEmpty()){toast("没有找到该房间已执行的任务，未改动记录");return;}
-            String[] labels=new String[matches.size()];for(int i=0;i<labels.length;i++){Repo.Task t=matches.get(i);labels[i]=new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(t.end))+" · 原状态 "+t.state;}
-            new AlertDialog.Builder(this).setTitle("选择截图对应的开奖时间").setItems(labels,(list,index)->{Repo.Task task=matches.get(index);new AlertDialog.Builder(this).setTitle("确认补记 "+battery+" 电池").setMessage(task.room+"\n"+labels[index]+"\n仅修正此条记录并重算连续未中。").setNegativeButton("取消",null).setPositiveButton("保存修正",(yes,ok)->{repo.win(task.id,battery,"电池",raw+"\n截图："+proof,true);int streak=repo.lossStreak();p.put("losses",""+streak);if(streak<p.n("lossLimit",10))p.put("sleepUntil","0");repo.log("连续未中重算","按最新中奖时间计算："+streak);show("记录");toast("已补记，连续未中为 "+streak);}).show();}).setNegativeButton("取消",null).show();
-        }).show();
+    String feedState(){if(!p.b("listen",false))return "接收已暂停";if(p.webMode())return PocketService.instance==null?"网页后台服务未连接，请到设置检查无障碍":p.s("webStatus","等待网页更新");return QQListener.connected?"正在接收 QQ 群消息":"QQ通知服务未连接，请到设置检查";}
+    void receive(){
+        if(p.webMode()){
+            if(urlInput!=null&&!applyWebUrl(urlInput.getText().toString(),true))return;
+            try{p.sourceKey();}catch(IllegalArgumentException e){toast(e.getMessage());return;}
+            PocketService service=PocketService.instance;if(service==null){toast("请在设置开启无障碍，连接后台监控服务");show("设置");return;}p.put("listen",true);service.web.refresh();
+        }else{if(!PermissionStatus.notificationEnabled(this)){toast("请在设置授权QQ通知读取");show("设置");return;}p.put("listen",true);if(QQListener.instance!=null)QQListener.instance.refresh();}
+        if(messageState!=null)messageState.setText(feedState());
+    }
+    void renderMessages(){
+        List<Repo.NoticeRow> rows=repo.notices(sourceKey());StringBuilder signature=new StringBuilder();long now=System.currentTimeMillis();for(Repo.NoticeRow row:rows)signature.append(row.id()).append(':').append(row.received()).append(row.state()).append(row.reason()).append(row.end()>now);
+        if(messageSignature.equals(signature.toString())&&messageRows.getChildCount()>0)return;messageSignature=signature.toString();messageRows.removeAllViews();
+        if(rows.isEmpty()){LinearLayout empty=messageCard("等待红包消息");note(empty,"点击开始接收后，新红包会逐条显示在这里。未满足条件的红包也会显示原因。");return;}
+        for(Repo.NoticeRow row:rows){
+            String status=row.state().matches("中奖|未中奖|未参与")?row.state():!row.reason().isEmpty()?row.reason():row.end()<=now&&row.state().equals("等待")?"已开奖":row.state().isEmpty()?"可参与":row.state();
+            String heading=row.kind().equals("gift_anchor")||row.kind().contains("天选")?"天选福袋 · 不参与":row.amount()>0?row.amount()+" 电池"+(row.shares()>0?" · "+row.shares()+" 份":""):"红包消息";
+            LinearLayout card=messageCard(heading);
+            fieldLine(card,"消息来源",row.sourceName());fieldLine(card,"条件",row.condition());fieldLine(card,"直播间信息",(row.room().isEmpty()?"房间号待确认":"房间 "+row.room())+(row.anchor().isEmpty()?"":" · "+row.anchor()));
+            fieldLine(card,"红包信息",row.reward()+(row.shares()>0?" / "+row.shares()+"份":"")+"\n"+(row.end()>0?new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(row.end()))+" 开奖":"开奖时间待确认"));
+            card.addView(text(status,13,row.reason().isEmpty()?0xff98d5bc:MUTED));link(card,"查看原文",()->showText("红包原文",row.raw()));
+        }
+    }
+    LinearLayout messageCard(String title){LinearLayout box=new LinearLayout(this);box.setOrientation(1);box.setPadding(dp(16),dp(12),dp(16),dp(12));box.setBackground(bg(CARD,16));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(10);messageRows.addView(box,lp);box.addView(text(title,17,ACCENT));return box;}
+    void fieldLine(LinearLayout parent,String label,String value){LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.TOP);row.addView(text(label,12,MUTED),new LinearLayout.LayoutParams(dp(80),-2));row.addView(text(value,14,INK),new LinearLayout.LayoutParams(0,-2,1));parent.addView(row);}
+    void showText(String title,String value){ScrollView scroll=new ScrollView(this);TextView text=text(value,13,Color.DKGRAY);text.setPadding(dp(18),dp(12),dp(18),dp(12));text.setTextIsSelectable(true);scroll.addView(text);new AlertDialog.Builder(this).setTitle(title).setView(scroll).setPositiveButton("关闭",null).show();}
+    void webAddress(LinearLayout parent){
+        urlInput=new AutoCompleteTextView(this);urlInput.setTextColor(INK);urlInput.setHintTextColor(MUTED);urlInput.setTextSize(14);urlInput.setSingleLine();urlInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);urlInput.setImeActionLabel("使用",android.view.inputmethod.EditorInfo.IME_ACTION_GO);urlInput.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_GO);urlInput.setText(p.s("webUrl",PoolEndpoint.DEFAULT));urlInput.setThreshold(0);urlInput.setDropDownBackgroundDrawable(bg(CARD,12));parent.addView(urlInput);
+        historyAdapter=new UrlHistoryAdapter();urlInput.setAdapter(historyAdapter);
+        urlInput.setOnClickListener(v->{historyAdapter.reload();urlInput.showDropDown();});urlInput.setOnFocusChangeListener((v,focus)->{if(focus)urlInput.post(()->{if(urlInput!=null){historyAdapter.reload();urlInput.showDropDown();}});});
+        urlInput.setOnItemClickListener((list,view,position,id)->useHistory(historyAdapter.getItem(position)));
+        urlInput.setOnEditorActionListener((v,action,event)->{if(action==android.view.inputmethod.EditorInfo.IME_ACTION_GO||action==android.view.inputmethod.EditorInfo.IME_ACTION_DONE){if(applyWebUrl(urlInput.getText().toString(),true)){urlInput.dismissDropDown();hideKeyboard();toast("已使用网址并保存到本地历史");}return true;}return false;});
+        note(parent,"新网址按键盘确认，或点击开始接收。");
+    }
+    boolean applyWebUrl(String text,boolean remember){
+        String value=text.trim(),endpoint;try{endpoint=PoolEndpoint.api(value);}catch(IllegalArgumentException e){toast(e.getMessage());return false;}
+        String old;try{old=PoolEndpoint.api(p.s("webUrl",PoolEndpoint.DEFAULT));}catch(IllegalArgumentException e){old="";}
+        PocketService service=PocketService.instance;boolean changed=!endpoint.equals(old),listening=p.b("listen",false);
+        if(changed&&service!=null&&service.running){toast("请先停止任务再切换网页来源");return false;}
+        if(changed){p.put("listen",false);if(service!=null&&service.web!=null)service.web.sync();p.put("webLastSuccess","0");p.put("webStatus","等待新网址更新");}
+        p.put("webUrl",value);if(remember)p.rememberWebUrl(value);if(historyAdapter!=null)historyAdapter.reload();
+        if(changed&&listening&&service!=null&&service.web!=null){p.put("listen",true);service.web.refresh();}return true;
+    }
+    void useHistory(String value){if(!applyWebUrl(value,true))return;urlInput.setText(value,false);urlInput.dismissDropDown();hideKeyboard();if(messageState!=null)messageState.setText(feedState());}
+    void hideKeyboard(){((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(base.getWindowToken(),0);if(urlInput!=null)urlInput.clearFocus();}
+    final class UrlHistoryAdapter extends BaseAdapter implements Filterable {
+        List<String> rows=new ArrayList<>(p.webHistory());
+        void reload(){rows=new ArrayList<>(p.webHistory());notifyDataSetChanged();}
+        public int getCount(){return rows.size();}public String getItem(int position){return rows.get(position);}public long getItemId(int position){return position;}
+        public View getView(int position,View recycled,ViewGroup parent){String value=getItem(position);LinearLayout row=new LinearLayout(MainActivity.this);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(12),0,dp(4),0);TextView title=text(value,13,INK);title.setSingleLine();title.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);row.addView(title,new LinearLayout.LayoutParams(0,dp(52),1));ImageButton delete=new ImageButton(MainActivity.this);delete.setImageResource(android.R.drawable.ic_menu_delete);delete.setColorFilter(MUTED);delete.setBackgroundColor(Color.TRANSPARENT);delete.setContentDescription("删除网址历史");delete.setFocusable(false);row.addView(delete,new LinearLayout.LayoutParams(dp(48),dp(48)));delete.setOnClickListener(v->{urlInput.dismissDropDown();new AlertDialog.Builder(MainActivity.this).setTitle("删除网址历史？").setMessage(value+"\n仅删除历史，不停止当前监控。").setNegativeButton("取消",null).setPositiveButton("删除",(dialog,which)->{p.removeWebHistory(value);reload();urlInput.post(()->urlInput.showDropDown());}).show();});return row;}
+        public Filter getFilter(){return new Filter(){protected FilterResults performFiltering(CharSequence input){FilterResults result=new FilterResults();List<String> data=p.webHistory();result.values=data;result.count=data.size();return result;}@SuppressWarnings("unchecked") protected void publishResults(CharSequence input,FilterResults result){rows=new ArrayList<>((List<String>)result.values);notifyDataSetChanged();}public CharSequence convertResultToString(Object value){return String.valueOf(value);}};}
+    }
+    void records(){
+        LinearLayout stats=card("参与概览");recordMetrics=new TextView[6];String[] labels={"已确认参与","中奖次数","累计电池","单次最高","已结算中奖率","连续未中"};
+        for(int row=0;row<3;row++){LinearLayout line=new LinearLayout(this);for(int col=0;col<2;col++){int i=row*2+col;LinearLayout metric=new LinearLayout(this);metric.setOrientation(1);metric.setPadding(dp(10),dp(6),dp(10),dp(6));metric.addView(text(labels[i],12,MUTED));recordMetrics[i]=text("—",22,ACCENT);metric.addView(recordMetrics[i]);line.addView(metric,new LinearLayout.LayoutParams(0,-2,1));}stats.addView(line);}
+        statNote=text("",12,MUTED);stats.addView(statNote);controls(stats,"导出 CSV",this::exportRecords,"选择导出目录",()->pick("exports"));
+        recordRows=new LinearLayout(this);recordRows.setOrientation(1);content.addView(recordRows);renderRecords();link(content,"加载更多记录",()->{recordLimit=Math.min(500,recordLimit+40);recordSignature="";renderRecords();});
+    }
+    void exportRecords(){try{String path=FilesOut.write(this,"exports","红包记录-"+System.currentTimeMillis()+".csv",repo.csv().getBytes(StandardCharsets.UTF_8),"text/csv");toast("已导出："+path);repo.log("导出",path);}catch(Exception e){toast("导出失败："+e.getMessage());}}
+    void renderRecords(){
+        Repo.Summary stats=repo.summary();String[] values={""+stats.participated(),""+stats.wins(),""+stats.batteries(),""+stats.maximum(),stats.rate(),""+p.n("losses",0)};for(int i=0;i<values.length;i++)recordMetrics[i].setText(values[i]);statNote.setText("电池仅计已识别的实际所得 · 数额待确认 "+stats.unknownPrize()+" 次\n旧版无法确认的记录不推定为已参与。");
+        List<Repo.RecordRow> rows=repo.records(recordLimit);StringBuilder signature=new StringBuilder();for(Repo.RecordRow r:rows)signature.append(r.id()).append(r.state()).append(r.quantity()).append(r.participated());if(recordSignature.equals(signature.toString())&&recordRows.getChildCount()>0)return;recordSignature=signature.toString();recordRows.removeAllViews();
+        if(rows.isEmpty()){recordRows.addView(text("还没有已执行的红包记录。",14,MUTED));return;}
+        for(Repo.RecordRow r:rows){LinearLayout box=new LinearLayout(this);box.setOrientation(1);box.setPadding(dp(16),dp(12),dp(16),dp(12));box.setBackground(bg(CARD,16));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(10);recordRows.addView(box,lp);
+            String prize=r.state().equals("中奖")?(r.quantity()==null?"数额待确认":r.quantity()+r.unit()):"";box.addView(text(r.state()+(prize.isEmpty()?"":" · "+prize),17,r.state().equals("中奖")?ACCENT:INK));
+            fieldLine(box,"消息来源",r.source());fieldLine(box,"直播间信息","房间 "+r.room()+(r.anchor().isEmpty()?"":" · "+r.anchor()));fieldLine(box,"红包信息",r.amount()+"电池 · "+r.condition()+"\n"+new java.text.SimpleDateFormat("MM-dd HH:mm:ss",Locale.CHINA).format(new Date(r.end()))+" 开奖");fieldLine(box,"参与结果",(r.participated()?"已确认参与":"未确认参与")+" · "+r.account()+(prize.isEmpty()?"":"\n实际所得："+prize));link(box,"查看详情",()->showText("红包记录详情","房间 "+r.room()+"\n"+r.state()+"\n"+r.evidence()));
+        }
     }
     void settings(){
         LinearLayout a=card("权限与消息源");button(a,"① 开启无障碍服务",()->PermissionStatus.accessibility(this));button(a,"② 开启 QQ 通知读取",()->PermissionStatus.notifications(this));button(a,"③ 电池与后台运行设置",()->startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)));
         note(a,PermissionStatus.summary(this));button(a,"应用详情 / 后台运行设置",()->startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getPackageName()))));
         note(a,"小米手机还需允许自启动、后台无限制；安装来源限制可能要求在应用详情里允许受限设置。无需 Root。");
         field(a,"目标群通知标题关键词（群名称，不是群号）","group","B站直播区游戏群",false);
+        link(a,"检查当前消息来源",()->show("消息"));
+        button(a,"只读识别红包（3秒后）",()->{PocketService service=PocketService.instance;if(service==null){toast("请先连接无障碍");return;}moveTaskToBack(true);handler.postDelayed(service::inspectPacket,3000);});
+        link(a,"查看运行日志",()->showText("运行日志",repo.events()));
+        LinearLayout network=card("网页监控设置");
+        link(network,"监控网址与历史记录",()->show("消息"));
+        field(network,"刷新间隔 / 秒（5～300）","webInterval","5",false);note(network,"适配天选红包池数据格式。网页模式无需QQ通知权限；后台监控使用无障碍服务保持连接。连接失败会退避重试；格式或时间异常时不创建新任务。");
+        link(network,"打开原网页",()->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(PoolEndpoint.api(p.s("webUrl",PoolEndpoint.DEFAULT)).replaceFirst("/api/state$",""))));}catch(RuntimeException e){toast("网页地址无效");}});
         LinearLayout b=card("黑名单");field(b,"房间号（逗号或换行分隔）","blacklist","",true);note(b,"黑名单在接收消息和进房前都会检查。");
         LinearLayout timing=card("任务与自动休眠");field(timing,"提前进房基准 / 秒","before","60",false);field(timing,"进房时间随机波动 ±秒（0关闭）","beforeJitter","10",false);field(timing,"开奖后最少留存 / 秒","after","30",false);field(timing,"留存额外随机增加 0～秒（0关闭）","afterExtra","10",false);
         note(timing,"默认提前50～70秒进房，开奖后留存30～40秒。同一任务只抽取一次；设置修改影响尚未排定时间的新任务。时间波动不保证避免平台识别。");
@@ -116,7 +172,7 @@ public class MainActivity extends Activity {
         field(dual,"进房验证房间号（两个账号统一使用B站内搜索）","routeRoom","",false);
         for(boolean backup:new boolean[]{false,true})button(dual,backup?"按房间号验证备用账号进房":"验证主账号进房",()->{PocketService service=PocketService.instance;if(service==null){toast("请先开启无障碍");return;}if(service.running){toast("请先停止任务");return;}String target=p.s("routeRoom","");if(!target.matches("[1-9][0-9]{0,14}")){toast("先填写验证房间号");return;}moveTaskToBack(true);handler.postDelayed(()->service.previewRoomRoute(target,backup),2000);});
         LinearLayout safe=card("异常停止");note(safe,"当前验证锁定："+p.s("verificationLock","无"));button(safe,"已人工处理验证，解除本地锁定",()->new AlertDialog.Builder(this).setTitle("解除本地锁定").setMessage("请先在B站中手动完成验证并确认账号状态正常。解除只允许再次启动，不代表平台限制已解除。").setPositiveButton("确认已处理",(d,w)->{p.put("verificationLock","");show("设置");}).setNegativeButton("取消",null).show());
-        LinearLayout about=card("关于与更新");note(about,"0.1.11 · 计数清零、时间范围与到点退出\n所有任务、通知原文和截图只保存在手机；不上传账号凭证。\n单账号流程；双开调度暂未启用。本版新增退出流程尚待真机验证。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
+        LinearLayout about=card("关于与更新");note(about,"0.1.12 · 简洁任务、红包卡片与网页监控\n任务与通知记录保存在手机；不保存截图文件；不上传账号凭证。\n单账号流程；双开调度暂未启用。消息来源可选QQ通知或网页池；完整自动流程仍以真机结果为准。");button(about,"GitHub 下载与更新",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/struggle0929/bili-pocket-android/releases"))));
     }
     void field(LinearLayout box,String title,String key,String def,boolean multiline){
         box.addView(text(title,14,MUTED));EditText e=new EditText(this);e.setTextColor(INK);e.setHintTextColor(MUTED);e.setText(p.s(key,def));e.setSingleLine(!multiline);e.setTextSize(15);box.addView(e,new LinearLayout.LayoutParams(-1,-2));
@@ -124,6 +180,6 @@ public class MainActivity extends Activity {
         e.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){p.put(key,s.toString().trim());}public void afterTextChanged(android.text.Editable x){}});
     }
     void pick(String key){folder=key;Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(i,42);}
-    @Override protected void onActivityResult(int r,int result,Intent data){super.onActivityResult(r,result,data);if(result!=RESULT_OK||data==null)return;if(r==44){inspectWinImage(data.getData());return;}if(r==42){Uri u=data.getData();getContentResolver().takePersistableUriPermission(u,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));p.put(folder,u.toString());show(page);}}
+    @Override protected void onActivityResult(int r,int result,Intent data){super.onActivityResult(r,result,data);if(result!=RESULT_OK||data==null)return;if(r==42){Uri u=data.getData();getContentResolver().takePersistableUriPermission(u,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));p.put(folder,u.toString());show(page);}}
     void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
 }

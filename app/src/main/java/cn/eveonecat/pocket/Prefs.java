@@ -16,4 +16,10 @@ public final class Prefs {
         return timing;
     }
     void clearLosses(){p.edit().putString("losses","0").putString("sleepUntil","0").apply();}
+    boolean webMode(){return s("sourceMode","qq").equals("web");}
+    String sourceKey(){return webMode()?"web:"+PoolEndpoint.api(s("webUrl",PoolEndpoint.DEFAULT)):"qq";}
+    String sourceName(){if(!webMode())return "QQ · "+s("group","B站直播区游戏群");try{return "网页 · "+java.net.URI.create(PoolEndpoint.api(s("webUrl",PoolEndpoint.DEFAULT))).getAuthority();}catch(RuntimeException e){return "网页 · 地址待检查";}}
+    java.util.List<String> webHistory(){if(!p.contains("webHistory")){java.util.List<String> seed=java.util.List.of(s("webUrl",PoolEndpoint.DEFAULT));put("webHistory",WebHistory.encode(seed));}return WebHistory.parse(s("webHistory","[]"));}
+    void rememberWebUrl(String value){put("webHistory",WebHistory.encode(WebHistory.remember(webHistory(),value)));}
+    void removeWebHistory(String value){put("webHistory",WebHistory.encode(WebHistory.remove(webHistory(),value)));}
 }

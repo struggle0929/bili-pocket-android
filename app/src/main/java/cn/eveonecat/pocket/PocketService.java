@@ -10,23 +10,23 @@ import android.content.*;
 import android.os.*;
 import android.net.Uri;
 import java.util.*;
-import java.io.*;
 
 public class PocketService extends AccessibilityService {
     public static PocketService instance;
     RoomNavigator roomNavigator;
     final Handler h=new Handler(Looper.getMainLooper());
     Prefs p;Repo repo; boolean running,busy,firstVisit,confirmed,submitted,visitSent,pendingFinish;
-    long generation=0,nextAction=0,entered=0,lastEvidence=0,lastResultRefresh=0,lastDrawLog=0;int enterAttempts=0,scans=0;String status="待机",room="";
+    long generation=0,nextAction=0,entered=0,lastResultRefresh=0,lastDrawLog=0;int enterAttempts=0,scans=0;String status="待机",room="";
     boolean liveActivity=false,visitRecorded=false,entryConfirmed=false;
     Repo.Task current; final Set<Long> roundConfirmed=new HashSet<>(),roundSubmitted=new HashSet<>();
     int screenWidth,screenHeight,packetX=-1,packetY=-1;
     long lossHintTask=-1;String lossHint="";int winAmountChecks;
-    RoomStay stay=new RoomStay(0);boolean leaving,homeReady,mainActivityObserved;long exitStarted,proofUntil;int exitAttempts;Repo.Task retryEntry;
+    RoomStay stay=new RoomStay(0);boolean leaving,homeReady,mainActivityObserved;long exitStarted;int exitAttempts;Repo.Task retryEntry;
     final Map<Long,TaskTiming> timings=new HashMap<>();
+    WebPoolMonitor web;
     WindowManager wm;View overlay;TextView overlayText;PowerManager.WakeLock wake;
-    final Runnable tick=new Runnable(){public void run(){try{step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}h.postDelayed(this,running&&current!=null?500:1000);}};
-    @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();room=p.s("activeRoom","");stay=new RoomStay(p.l("roomLeaveAt",0));wm=(WindowManager)getSystemService(WINDOW_SERVICE);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
+    final Runnable tick=new Runnable(){public void run(){try{if(web!=null)web.sync();step();}catch(Exception e){stop("运行异常："+e.getClass().getSimpleName()+" "+e.getMessage(),true);}h.postDelayed(this,running&&current!=null?500:1000);}};
+    @Override protected void onServiceConnected(){instance=this;p=new Prefs(this);repo=new Repo(this);repo.recover();room=p.s("activeRoom","");stay=new RoomStay(p.l("roomLeaveAt",0));wm=(WindowManager)getSystemService(WINDOW_SERVICE);web=new WebPoolMonitor(this,h);h.post(tick);repo.log("无障碍连接","服务已连接；运行时不要同时使用会独占无障碍的界面抓取工具");}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){
         if(roomNavigator!=null)roomNavigator.event(e);
         if(running&&current!=null&&"tv.danmaku.bili".contentEquals(e.getPackageName()==null?"":e.getPackageName())&&ResultEvidence.inWindow(System.currentTimeMillis(),current.end,confirmed)){
@@ -37,18 +37,19 @@ public class PocketService extends AccessibilityService {
         }
     }
     @Override public void onInterrupt(){stop("无障碍中断",false);}
-    @Override public void onDestroy(){stop("服务关闭",false);h.removeCallbacksAndMessages(null);if(instance==this)instance=null;if(repo!=null)repo.close();super.onDestroy();}
+    @Override public void onDestroy(){stop("服务关闭",false);if(web!=null)web.close();h.removeCallbacksAndMessages(null);if(instance==this)instance=null;if(repo!=null)repo.close();super.onDestroy();}
     boolean blocked(){return !p.s("verificationLock","").isEmpty();}
     public void start(){
         if(running)return;
         if(roomNavigator!=null)roomNavigator.cancel();
         if(blocked()){status="验证锁定：请在设置确认处理后解除";return;}
-        if(!notificationEnabled()){status="请先授权 QQ 通知读取";return;}
-        p.put("listen",true);running=true;generation++;busy=false;nextAction=0;current=null;retryEntry=null;leaving=false;homeReady=false;pendingFinish=false;status="监听 QQ · 等待任务";
+        if(!p.webMode()&&!notificationEnabled()){status="请到设置授权 QQ 通知读取";return;}
+        try{p.sourceKey();}catch(IllegalArgumentException e){status=e.getMessage();return;}
+        p.put("listen",true);running=true;generation++;busy=false;nextAction=0;current=null;retryEntry=null;leaving=false;homeReady=false;pendingFinish=false;status=(p.webMode()?"监控网页":"监听 QQ")+" · 等待任务";
         if(p.s("joinActions","emoji:EveOneCat2").equals("emoji:EveOneCat2"))p.put("joinActions","text:来了~");
         showOverlay();
         PowerManager pm=(PowerManager)getSystemService(POWER_SERVICE);wake=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"pocket:runner");wake.acquire(4*60*60*1000L);
-        repo.log("启动","独立手机模式，QQ 通知监听；保持手机解锁及屏幕亮起");if(QQListener.instance!=null)QQListener.instance.refresh();
+        repo.log("启动",p.sourceName()+"；保持手机解锁及屏幕亮起");if(p.webMode()){if(web!=null)web.refresh();}else if(QQListener.instance!=null)QQListener.instance.refresh();
     }
     boolean notificationEnabled(){String v=android.provider.Settings.Secure.getString(getContentResolver(),"enabled_notification_listeners");return v!=null&&v.contains(getPackageName());}
     public void stop(String reason,boolean lock){
@@ -76,24 +77,24 @@ public class PocketService extends AccessibilityService {
         android.app.KeyguardManager kg=(android.app.KeyguardManager)getSystemService(KEYGUARD_SERVICE);if(kg.isKeyguardLocked()){status="手机锁定 · 等待解锁";return;}
         if(leaving){checkHomeExit(now);return;}
         if(current==null&&!room.isEmpty()){
-            if(now<proofUntil){status="保存结果截图 · 稍后退出";return;}
             if(!stay.due(now)){status="留存至 "+new java.text.SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(new Date(stay.until()));return;}
             beginHomeExit("留存结束");return;
         }
         // Leaving a completed room must run even while the loss-limit rest timer is active.
         if(p.until()>now){status="休眠至 "+new java.text.SimpleDateFormat("HH:mm:ss").format(new Date(p.until()));return;}
         if(p.until()!=0){p.clearLosses();status="休眠结束 · 继续监听";}
-        List<Repo.Task> tasks=repo.tasks();
+        List<Repo.Task> tasks=repo.tasksForSource(p.sourceKey());
         if(current==null){
+            if(p.webMode()&&now-p.l("webLastSuccess",0)>120000){status="等待网页最新数据 · 暂不进房";return;}
             for(Repo.Task t:tasks)if(t.state.equals("等待")){
                 if(PacketParser.blacklisted(p.s("blacklist",""),t.room)){repo.state(t.id,"黑名单","");continue;}
                 if(t.end<=now){repo.state(t.id,"已过期","");continue;}
                 if(now>=timing(t).enterAt(t.end)){if(!homeReady){beginHomeExit("进房前清理页面");return;}enter(t);return;}
             }
-            status=room.isEmpty()?"监听 QQ · 等待进房时间":"留在直播间 · 等待下一任务";return;
+            status=room.isEmpty()?(p.webMode()?"监控网页":"监听 QQ")+" · 等待进房时间":"留在直播间 · 等待下一任务";return;
         }
         if(choosePrimaryApp()){nextAction=now+650;return;}
-        for(AccessibilityWindowInfo win:getWindows()){AccessibilityNodeInfo chooser=win.getRoot();if(chooser!=null&&"com.miui.securitycore".contentEquals(chooser.getPackageName()==null?"":chooser.getPackageName())){status="等待系统应用选择 · 不重复启动房间链接";if(now-entered>90000){capture("app-chooser");stop("无法确认主应用选择，请人工处理系统选择框",false);}return;}}
+        for(AccessibilityWindowInfo win:getWindows()){AccessibilityNodeInfo chooser=win.getRoot();if(chooser!=null&&"com.miui.securitycore".contentEquals(chooser.getPackageName()==null?"":chooser.getPackageName())){status="等待系统应用选择 · 不重复启动房间链接";if(now-entered>90000){stop("无法确认主应用选择，请人工处理系统选择框",false);}return;}}
         // Only manipulate Bilibili. Other foreground apps pause the workflow.
         AccessibilityNodeInfo root=biliRoot();String pkg=root==null?"":String.valueOf(root.getPackageName());
         boolean controls=false;if(root!=null){List<AccessibilityNodeInfo> found=new ArrayList<>();walk(root,found);for(AccessibilityNodeInfo n:found){String id=n.getViewIdResourceName();if(id!=null&&(id.endsWith("/live_send_danmaku")||id.endsWith("/bt_emotion_show")))controls=true;}}
@@ -149,7 +150,7 @@ public class PocketService extends AccessibilityService {
         if(s.entry!=null){packetX=s.entry.centerX();packetY=s.entry.centerY();}
         // Only visible dialog labels in the central region trigger the safety latch.
         for(Screen.Label l:s.labels)if(l.rect.centerY()>s.height*.18&&l.rect.centerY()<s.height*.85&&l.text.matches(".*(人机验证|安全验证|请完成验证|拖动滑块|操作频繁|账号异常|验证后继续).*")){
-            String reason="检测到验证/限制："+l.text;capture("verification");stop(reason,true);return;
+            String reason="检测到验证/限制："+l.text;stop(reason,true);return;
         }
         if(s.has("无法进入直播间")||s.has("你已被拉黑")||s.has("直播间不存在")){
             if(enterAttempts<2){retryRoomEntry();return;}
@@ -157,14 +158,14 @@ public class PocketService extends AccessibilityService {
         }
         if(s.has("点个关注吧")||s.has("关注主播不迷路")){if(!clickNode("关闭")){if(p.s("followClose","").isEmpty()){stop("关注弹窗需要标定关闭按钮",false);return;}tapRelative(p.s("followClose",""));}nextAction=now+1500;return;}
         for(Screen.Label l:s.labels)if(l.rect.centerX()>s.width*.15&&l.rect.centerX()<s.width*.85&&l.rect.centerY()>s.height*.20&&l.text.replaceAll("\\s","").matches("^(确认支付|立即支付|去充值|充值|余额不足|确认购买|开通大航海)$")){
-            capture("payment-stop");stop("遇到其他付费/充值确认："+l.text,true);return;
+            stop("遇到其他付费/充值确认："+l.text,true);return;
         }
         if(s.won()&&confirmed&&now>=current.end-3000){
-            Integer battery=s.prizeBattery();if(battery==null&&++winAmountChecks<4){status="中奖 · 等待奖品数额加载";nextAction=now+500;return;}capture("win");
-            if(repo.win(current.id,battery,battery==null?"":"电池",s.panelText()+"\n独立奖品识别："+(battery==null?"数额待确认":battery+"电池"),false)){
+            Integer battery=s.prizeBattery();if(battery==null&&++winAmountChecks<4){status="中奖 · 等待奖品数额加载";nextAction=now+500;return;}
+            if(repo.win(current.id,battery,battery==null?"":"电池",s.panelText()+"\n独立奖品识别："+(battery==null?"数额待确认":battery+"电池"))){
                 p.put("losses","0");p.put("sleepUntil","0");status="中奖 "+(battery==null?"（金额待确认）":battery+"电池")+" · 连续未中已清零";
                 long g=generation;busy=true;Screen.Label accept=s.panelExact("开心收下","收下奖励");
-                h.postDelayed(()->{if(!running||g!=generation)return;if(accept!=null)tap(accept.rect.centerX(),accept.rect.centerY());h.postDelayed(()->{if(!running||g!=generation)return;busy=false;if(firstVisit)sendActions("win",accept!=null);finishRound();},500);},1100);
+                h.postDelayed(()->{if(!running||g!=generation)return;if(accept!=null)tap(accept.rect.centerX(),accept.rect.centerY());h.postDelayed(()->{if(!running||g!=generation)return;busy=false;if(firstVisit)sendActions("win",accept!=null);finishRound();},500);},300);
                 return;
             }finishRound();return;
         }
@@ -178,11 +179,11 @@ public class PocketService extends AccessibilityService {
             }
             if(loss||s.panelHas("未中奖")||s.panelHas("很遗憾")||s.panelHas("未能中奖")){
                 repo.state(current.id,confirmed?"未中奖":"未参与",s.panelText()+"\n结果提示："+lossHint);
-            if(confirmed){capture("not-won");int losses=p.n("losses",0)+1;p.put("losses",""+losses);if(firstVisit)sendActions("lose");if(losses>=Math.max(1,p.n("lossLimit",10))){
+            if(confirmed){int losses=p.n("losses",0)+1;p.put("losses",""+losses);if(firstVisit)sendActions("lose");if(losses>=Math.max(1,p.n("lossLimit",10))){
                     long wakeAt=now+Math.max(1,p.n("restMinutes",60))*60000L;p.put("sleepUntil",""+wakeAt);repo.log("自动休眠","连续未中奖达到上限，唤醒时间 "+wakeAt);
                 }}finishRound();return;
             }
-            if(now>current.end+Math.max(20,p.n("after",30))*1000L){repo.state(current.id,"无法确认","没有明确中奖或未中奖证据，不计连续未中奖");capture("unknown");finishRound();return;}
+            if(now>current.end+Math.max(20,p.n("after",30))*1000L){repo.state(current.id,"无法确认","没有明确中奖或未中奖证据，不计连续未中奖");finishRound();return;}
             if(s.panelHas("发的红包")||s.panelHas("开奖")){
                 if(now>=current.end+3000&&now-lastResultRefresh>7000){lastResultRefresh=now;closePacket();h.postDelayed(()->{if(running&&current!=null)openPacket();},800);repo.log("开奖复查","重新打开红包读取结果");}
                 status="等待开奖结果";nextAction=now+2200;return;
@@ -205,12 +206,12 @@ public class PocketService extends AccessibilityService {
             if(grab!=null&&!submitted){
                 String panel=s.panelText().replaceAll("\\s","");
                 if(panel.contains("需入团")){
-                    if(!panel.contains("需入团（1电池）")&&!panel.contains("需入团(1电池)")){capture("payment-limit");stop("入团费用不是明确的1电池，停止",true);return;}
+                    if(!panel.contains("需入团（1电池）")&&!panel.contains("需入团(1电池)")){stop("入团费用不是明确的1电池，停止",true);return;}
                     if(!p.b("allowOneBattery",false)){repo.state(current.id,"已跳过","需花费1电池入团，未授权付费");finishRound();return;}
                     if(p.b("membershipSpent."+room,false)){repo.state(current.id,"已跳过","此房间已尝试过1电池入团，不再次付费");finishRound();return;}
                     p.put("membershipSpent."+room,true);repo.log("入团授权使用","房间 "+room+"，本房间仅此次，1电池上限");
                 }
-                submitted=true;roundSubmitted.add(current.id);tap(grab.rect.centerX(),grab.rect.centerY());repo.state(current.id,"已点击待确认",s.panelText());nextAction=now+650;status="已点击 · 核对参与状态";capture("claim");return;
+                submitted=true;roundSubmitted.add(current.id);tap(grab.rect.centerX(),grab.rect.centerY());repo.state(current.id,"已点击待确认",s.panelText());nextAction=now+650;status="已点击 · 核对参与状态";return;
             }
             status=submitted?"提交后未确认 · 不重复点击":"未发现可用的抢按钮";return;
         }
@@ -220,7 +221,7 @@ public class PocketService extends AccessibilityService {
     void alignConfirmedRound(Screen screen,long now){
         int seconds=screen.panelSeconds();if(seconds<0||seconds>86400)return;long end=now+seconds*1000L;
         if(Math.abs(end-current.end)<12000)return;
-        for(Repo.Task task:repo.tasks())if(task.id!=current.id&&task.room.equals(current.room)&&task.amount==screen.amount()&&Math.abs(task.end-end)<12000&&task.state.equals("等待")){
+        for(Repo.Task task:repo.tasksForSource(p.sourceKey()))if(task.id!=current.id&&task.room.equals(current.room)&&task.amount==screen.amount()&&Math.abs(task.end-end)<12000&&task.state.equals("等待")){
             long old=current.id;repo.state(old,"等待","已参与卡片对应同房另一开奖任务，原任务继续排队");roundSubmitted.remove(old);current=task;roundSubmitted.add(task.id);return;
         }repo.alignEnd(current,end);
     }
@@ -228,7 +229,7 @@ public class PocketService extends AccessibilityService {
         if(current==null)return;
         if(busy){pendingFinish=true;return;}
         long now=System.currentTimeMillis();String doneRoom=current.room;stay.include(current.end,timing(current));p.put("roomLeaveAt",""+stay.until());current=null;
-        if(p.until()<=now)for(Repo.Task t:repo.tasks())if(t.room.equals(doneRoom)&&t.state.equals("等待")&&t.end>now&&!PacketParser.blacklisted(p.s("blacklist",""),t.room)){
+        if(p.until()<=now)for(Repo.Task t:repo.tasksForSource(p.sourceKey()))if(t.room.equals(doneRoom)&&t.state.equals("等待")&&t.end>now&&!PacketParser.blacklisted(p.s("blacklist",""),t.room)){
             enter(t);if(!running)return;visitSent=true;swipe();nextAction=now+500;status="切换同房下一个红包";return;
         }
         nextAction=0;status="本轮结束 · 留存后退出直播间";
@@ -242,7 +243,7 @@ public class PocketService extends AccessibilityService {
     void beginHomeExit(String reason){
         int windows=0;for(AccessibilityWindowInfo win:getWindows()){AccessibilityNodeInfo n=win.getRoot();if(n!=null&&"tv.danmaku.bili".contentEquals(n.getPackageName()==null?"":n.getPackageName()))windows++;}
         if(windows>1){stop("检测到多个B站窗口，暂停单账号退出以免影响另一个账号",false);return;}
-        for(AccessibilityNodeInfo n:nodes())if(n.isVisibleToUser()&&String.valueOf(n.getText()).matches(".*(人机验证|安全验证|请完成验证|拖动滑块|账号异常|操作频繁).*")){capture("verification");stop("退出前检测到验证/限制，请人工处理",true);return;}
+        for(AccessibilityNodeInfo n:nodes())if(n.isVisibleToUser()&&String.valueOf(n.getText()).matches(".*(人机验证|安全验证|请完成验证|拖动滑块|账号异常|操作频繁).*")){stop("退出前检测到验证/限制，请人工处理",true);return;}
         leaving=true;homeReady=false;exitAttempts=0;repo.log("准备退出直播间",(room.isEmpty()?"启动清理":room)+" · "+reason);launchHome();
     }
     void launchHome(){
@@ -258,7 +259,7 @@ public class PocketService extends AccessibilityService {
         for(AccessibilityNodeInfo n:all)if(n.isVisibleToUser()){
             String id=n.getViewIdResourceName();if(id!=null&&(id.endsWith("/live_send_danmaku")||id.endsWith("/bt_emotion_show")))liveControls=true;
             String value=String.valueOf(n.getText()).trim();labels.add(value);
-            if(value.matches(".*(人机验证|安全验证|请完成验证|拖动滑块|账号异常|操作频繁).*")){capture("verification");stop("退出时检测到验证/限制，请人工处理",true);return;}
+            if(value.matches(".*(人机验证|安全验证|请完成验证|拖动滑块|账号异常|操作频繁).*")){stop("退出时检测到验证/限制，请人工处理",true);return;}
         }
         if(HomeEvidence.confirmed(root!=null,liveControls,mainActivityObserved,labels)){
             repo.log("已退出直播间",room.isEmpty()?"已确认B站首页，允许进房":room+" · 已确认B站首页，旧页面栈已清理");
@@ -313,7 +314,7 @@ public class PocketService extends AccessibilityService {
     void action(List<String> actions,int i,long g){
         if(!running||g!=generation){busy=false;return;}
         if(i>=actions.size()){dismissComposer(g,()->{busy=false;if(pendingFinish){pendingFinish=false;finishRound();}else openPacket();},0);return;}
-        for(AccessibilityNodeInfo node:nodes()){String label=String.valueOf(node.getText());if(label.matches(".*(人机验证|安全验证|请完成验证|拖动滑块).*")){capture("verification");stop("消息阶段检测到验证",true);return;}}
+        for(AccessibilityNodeInfo node:nodes()){String label=String.valueOf(node.getText());if(label.matches(".*(人机验证|安全验证|请完成验证|拖动滑块).*")){stop("消息阶段检测到验证",true);return;}}
         String a=actions.get(i);
         if(a.startsWith("text:")){
             String[] pool=a.substring(5).trim().split("\\|");String text=pool[new Random().nextInt(pool.length)];
@@ -481,18 +482,6 @@ public class PocketService extends AccessibilityService {
         Runnable oldArm=arm[0];arm[0]=()->{if(!finished[0])oldArm.run();};
         done.setOnClickListener(v->{if(!steps.isEmpty()){String old=p.s("emoji.EveOneCat2","");p.put("emoji.EveOneCat2",old+(old.isEmpty()?"":";")+String.join(" ",steps));repo.log("表情路径保存","EveOneCat2 · "+steps.size()+" 步");}clean.run();});
         cancel.setOnClickListener(v->clean.run());wm.addView(tools,toolbar);
-    }
-    public void capture(String type){
-        if(System.currentTimeMillis()-lastEvidence<1500)return;lastEvidence=System.currentTimeMillis();
-        if(current!=null)proofUntil=lastEvidence+2800;
-        final String target=room;final long task=current==null?0:current.id;
-        // OCR just used takeScreenshot; Android rejects another capture immediately.
-        h.postDelayed(()->captureNow(type,target,task,0),800);
-    }
-    void captureNow(String type,String target,long task,int retry){
-        takeScreenshot(Display.DEFAULT_DISPLAY,getMainExecutor(),new TakeScreenshotCallback(){public void onSuccess(ScreenshotResult s){
-            try {Bitmap hw=Bitmap.wrapHardwareBuffer(s.getHardwareBuffer(),s.getColorSpace());Bitmap b=hw.copy(Bitmap.Config.ARGB_8888,false);hw.recycle();ByteArrayOutputStream out=new ByteArrayOutputStream();b.compress(Bitmap.CompressFormat.PNG,100,out);String path=FilesOut.write(PocketService.this,"screenshots",type+"-"+target+"-"+task+"-"+System.currentTimeMillis()+".png",out.toByteArray(),"image/png");repo.log("截图",path);b.recycle();}catch(Exception e){repo.log("截图失败",e.toString());}finally{s.getHardwareBuffer().close();}
-        }public void onFailure(int code){if(code==3&&retry<2){h.postDelayed(()->captureNow(type,target,task,retry+1),700);return;}repo.log("截图失败","错误码 "+code);}});
     }
     public void inspectPacket(){
         if(running){Toast.makeText(this,"先停止自动运行，再做只读检查",Toast.LENGTH_LONG).show();return;}
